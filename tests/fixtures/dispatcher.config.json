@@ -1,0 +1,42 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 4318,
+    "publicBaseUrl": "http://openclaw-nas:4318"
+  },
+  "auth": {
+    "dispatcherToken": "panel-token",
+    "agentToken": "agent-token"
+  },
+  "projects": [
+    {
+      "id": "openclaw",
+      "name": "OpenClaw Bridge",
+      "path": "D:/aixm/openclaw",
+      "defaultMode": "codex",
+      "allowedModes": ["codex", "dry-run"],
+      "notify": true
+    },
+    {
+      "id": "sjnews",
+      "name": "Design Hot",
+      "path": "D:/aixm/sjnews",
+      "defaultMode": "codex",
+      "allowedModes": ["codex"],
+      "notify": true
+    }
+  ],
+  "projectDiscovery": {
+    "enabled": true,
+    "roots": ["D:/aixm"],
+    "exclude": ["beifen"],
+    "defaultMode": "codex",
+    "allowedModes": ["codex", "dry-run"],
+    "notify": true
+  },
+  "codex": {
+    "command": "node",
+    "args": ["D:/aixm/openclaw/node_modules/@openai/codex/bin/codex.js", "exec", "--skip-git-repo-check", "--cd", "{{projectPath}}", "{{prompt}}"],
+    "promptStdin": false
+  }
+}

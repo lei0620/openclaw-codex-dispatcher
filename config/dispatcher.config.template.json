@@ -1,0 +1,32 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 4318,
+    "publicBaseUrl": "http://REPLACE_WITH_NAS_HOST:1314"
+  },
+  "auth": {
+    "dispatcherToken": "REPLACE_WITH_DISPATCHER_TOKEN",
+    "agentToken": "REPLACE_WITH_AGENT_TOKEN"
+  },
+  "projects": [],
+  "projectDiscovery": {
+    "enabled": true,
+    "roots": ["D:/aixm"],
+    "exclude": ["beifen"],
+    "defaultMode": "codex",
+    "allowedModes": ["codex", "dry-run"],
+    "notify": true
+  },
+  "codex": {
+    "command": "node",
+    "args": [
+      "D:/aixm/openclaw/node_modules/@openai/codex/bin/codex.js",
+      "exec",
+      "--skip-git-repo-check",
+      "--cd",
+      "{{projectPath}}",
+      "{{prompt}}"
+    ],
+    "promptStdin": false
+  }
+}

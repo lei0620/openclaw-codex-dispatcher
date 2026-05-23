@@ -1,0 +1,18 @@
+services:
+  openclaw-codex-dispatcher:
+    image: node:24-alpine
+    working_dir: /app
+    command: sh -c "npm ci --omit=optional && npm run dev:server"
+    ports:
+      - "${OPENCLAW_PANEL_PORT:-1314}:4318"
+      - "${OPENCLAW_LEGACY_PORT:-4318}:4318"
+    environment:
+      OPENCLAW_CONFIG: /app/config/dispatcher.config.json
+    volumes:
+      - ./:/app
+      - ./config/dispatcher.config.json:/app/config/dispatcher.config.json:ro
+      - node_modules:/app/node_modules
+    restart: unless-stopped
+
+volumes:
+  node_modules:

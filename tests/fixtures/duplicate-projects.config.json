@@ -1,0 +1,31 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 4318
+  },
+  "auth": {
+    "dispatcherToken": "panel-token",
+    "agentToken": "agent-token"
+  },
+  "projects": [
+    {
+      "id": "openclaw",
+      "name": "A",
+      "path": "D:/aixm/openclaw",
+      "defaultMode": "codex",
+      "allowedModes": ["codex"]
+    },
+    {
+      "id": "openclaw",
+      "name": "B",
+      "path": "D:/aixm/openclaw2",
+      "defaultMode": "codex",
+      "allowedModes": ["codex"]
+    }
+  ],
+  "codex": {
+    "command": "codex",
+    "args": ["exec", "{{prompt}}"],
+    "promptStdin": false
+  }
+}
