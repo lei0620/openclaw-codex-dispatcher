@@ -1,8 +1,8 @@
 # OpenClaw Codex Dispatcher
 
-NAS-hosted web panel + Win11 agent for controlling Codex CLI from a phone.
+NAS-hosted web panel plus Win11 agent for controlling Codex CLI from a phone.
 
-中文用户请先看：[README.zh-CN.md](README.zh-CN.md)
+Chinese users: start with [README.zh-CN.md](README.zh-CN.md).
 
 ## What It Does
 
