@@ -41,7 +41,9 @@ export function createApiRouter({ config, store }: ApiDeps): express.Router {
 
   router.get("/conversations", (req, res) => {
     const projectId = typeof req.query.projectId === "string" ? req.query.projectId : undefined;
-    res.json({ conversations: store.listConversations(projectId) });
+    const rawLimit = typeof req.query.limit === "string" ? req.query.limit : undefined;
+    const limit = Number.parseInt(rawLimit ?? "", 10);
+    res.json({ conversations: store.listConversations(projectId, Number.isFinite(limit) ? limit : undefined) });
   });
 
   router.post("/conversations", (req, res) => {
@@ -49,6 +51,12 @@ export function createApiRouter({ config, store }: ApiDeps): express.Router {
     resolveProject(store.listProjects(config.projects), body.projectId);
     const conversation = store.createConversation({ projectId: body.projectId, title: body.title });
     res.status(201).json({ conversation });
+  });
+
+  router.post("/conversations/sync", async (_req, res) => {
+    store.requestCodexSessionSync();
+    await store.waitForCodexSessionSync();
+    res.json({ ok: true, conversations: store.listConversations() });
   });
 
   router.get("/conversations/:id/tasks", (req, res) => {
@@ -62,6 +70,29 @@ export function createApiRouter({ config, store }: ApiDeps): express.Router {
 
   router.get("/agents", (_req, res) => {
     res.json({ agents: store.listAgents() });
+  });
+
+  router.get("/approvals", (req, res) => {
+    const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    res.json({ approvals: store.listApprovals(status === "pending" || status === "approved" || status === "denied" ? status : undefined) });
+  });
+
+  router.post("/approvals/:id/approve", (req, res) => {
+    try {
+      const approval = store.resolveApproval(req.params.id, "approved");
+      res.json({ approval });
+    } catch (error) {
+      res.status(404).json({ error: error instanceof Error ? error.message : "approval not found" });
+    }
+  });
+
+  router.post("/approvals/:id/deny", (req, res) => {
+    try {
+      const approval = store.resolveApproval(req.params.id, "denied");
+      res.json({ approval });
+    } catch (error) {
+      res.status(404).json({ error: error instanceof Error ? error.message : "approval not found" });
+    }
   });
 
   router.get("/tasks", (_req, res) => {

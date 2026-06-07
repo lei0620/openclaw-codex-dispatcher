@@ -42,6 +42,19 @@ const config: DispatcherConfig = {
     command: "node",
     args: ["D:/aixm/openclaw/node_modules/@openai/codex/bin/codex.js", "exec", "{{prompt}}"],
     promptStdin: false
+  },
+  codexAppServer: {
+    enabled: false,
+    url: "ws://127.0.0.1:8765",
+    startupTimeoutMs: 8000,
+    requestTimeoutMs: 30000
+  },
+  desktopInput: {
+    enabled: false,
+    scriptPath: "scripts/send-codex-desktop-input.ps1",
+    clickYOffset: 92,
+    windowTitlePattern: "Codex|OpenAI",
+    responseTimeoutMs: 180000
   }
 };
 
@@ -67,6 +80,39 @@ describe("TaskStore conversations", () => {
 
     expect(reloaded.listConversations()).toMatchObject([{ id: conversation.id, projectId: "openclaw" }]);
     expect(reloaded.listTasks(conversation.id)).toMatchObject([{ id: task.id, prompt: "继续这个对话" }]);
+  });
+
+  it("binds a phone-created conversation to the desktop Codex session after the first turn", () => {
+    const store = new TaskStore();
+    const conversation = store.createConversation({ projectId: "openclaw", title: "手机新对话" });
+    const firstTask = store.createTask({
+      projectId: "openclaw",
+      conversationId: conversation.id,
+      prompt: "在电脑端创建真实会话",
+      mode: "codex",
+      source: "panel"
+    });
+
+    store.completeTask(firstTask.id, {
+      exitCode: 0,
+      summary: "完成",
+      diffSummary: "no changes",
+      codexSessionId: "019ea06b-17d8-7a32-8106-334d3ae55286"
+    });
+
+    const secondTask = store.createTask({
+      projectId: "openclaw",
+      conversationId: conversation.id,
+      prompt: "继续同一个电脑端会话",
+      mode: "codex",
+      source: "panel"
+    });
+
+    expect(store.getConversation(conversation.id)).toMatchObject({
+      source: "codex",
+      codexSessionId: "019ea06b-17d8-7a32-8106-334d3ae55286"
+    });
+    expect(secondTask.codexSessionId).toBe("019ea06b-17d8-7a32-8106-334d3ae55286");
   });
 });
 

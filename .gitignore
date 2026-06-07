@@ -1,10 +1,12 @@
 node_modules/
 dist/
+.learnings/
 .env
 *.zip
 release/
 logs/
 data/
+public/downloads/
 docker-compose.yml
 config/dispatcher.config.json
 config/agent.local.config.json

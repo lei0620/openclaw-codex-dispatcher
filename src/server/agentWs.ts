@@ -1,6 +1,6 @@
 import type http from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
-import type { AgentClientMessage, DispatcherConfig, DispatcherServerMessage, ProjectConfig, TaskRecord } from "../shared/types.js";
+import type { AgentClientMessage, ApprovalRecord, DispatcherConfig, DispatcherServerMessage, ProjectConfig, TaskRecord } from "../shared/types.js";
 import { resolveProject } from "../shared/pathPolicy.js";
 import type { TaskStore } from "./taskStore.js";
 
@@ -31,6 +31,25 @@ export function attachAgentWebSocketServer({ server, config, store }: AgentWsDep
     const task = record as TaskRecord;
     if (task.agentId) {
       send(agents.get(task.agentId), { type: "task.cancelled", taskId: task.id });
+    }
+  });
+
+  store.onStoreEvent("approval.resolved", (record) => {
+    const approval = record as ApprovalRecord;
+    if (!approval.agentId || approval.status === "pending") {
+      return;
+    }
+    send(agents.get(approval.agentId), {
+      type: "task.approval.resolved",
+      approvalId: approval.id,
+      taskId: approval.taskId,
+      decision: approval.status
+    });
+  });
+
+  store.onControlEvent("codex.syncRequested", () => {
+    for (const ws of agents.values()) {
+      send(ws, { type: "agent.syncCodexSessions" });
     }
   });
 
@@ -81,8 +100,14 @@ function handleAgentMessage(
   if (message.type === "task.log") {
     store.appendLog(message.taskId, message.stream, message.text);
   }
+  if (message.type === "task.approval.requested") {
+    store.requestApproval({ ...message.approval, agentId });
+  }
   if (message.type === "agent.projects") {
     store.setAgentProjects(agentId, message.projects);
+  }
+  if (message.type === "agent.codexConversations") {
+    store.upsertCodexConversations(message.conversations);
   }
   if (message.type === "task.result") {
     store.completeTask(message.taskId, message.result);

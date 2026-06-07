@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">手机遥控 Codex</string>
+    <string name="title_activity_main">手机遥控 Codex</string>
+    <string name="package_name">com.aixm.openclawcodex</string>
+    <string name="custom_url_scheme">com.aixm.openclawcodex</string>
+</resources>

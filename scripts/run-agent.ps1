@@ -1,5 +1,5 @@
 param(
-  [string]$Config = "config/dispatcher.config.example.json",
+  [string]$Config = "config/dispatcher.config.json",
   [string]$DispatcherUrl = "http://192.168.101.8:1314",
   [string]$AgentId = $env:COMPUTERNAME
 )

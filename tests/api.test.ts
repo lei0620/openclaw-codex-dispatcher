@@ -30,13 +30,30 @@ const config: DispatcherConfig = {
     command: "codex",
     args: ["exec", "{{prompt}}"],
     promptStdin: false
+  },
+  codexAppServer: {
+    enabled: false,
+    url: "ws://127.0.0.1:8765",
+    startupTimeoutMs: 8000,
+    requestTimeoutMs: 30000
+  },
+  desktopInput: {
+    enabled: false,
+    scriptPath: "scripts/send-codex-desktop-input.ps1",
+    clickYOffset: 92,
+    windowTitlePattern: "Codex|OpenAI",
+    responseTimeoutMs: 180000
   }
 };
 
 function buildApp() {
+  return buildAppWithStore(new TaskStore());
+}
+
+function buildAppWithStore(store: TaskStore) {
   const app = express();
   app.use(express.json());
-  app.use("/api", createApiRouter({ config, store: new TaskStore() }));
+  app.use("/api", createApiRouter({ config, store }));
   return app;
 }
 
@@ -65,5 +82,30 @@ describe("task api", () => {
       .set("Authorization", "Bearer panel-token")
       .send({ projectId: "outside", prompt: "x" })
       .expect(400);
+  });
+
+  it("lists and resolves pending approvals", async () => {
+    const store = new TaskStore();
+    const app = buildAppWithStore(store);
+    const task = store.createTask({
+      projectId: "openclaw",
+      prompt: "需要授权",
+      mode: "codex",
+      source: "panel"
+    });
+    store.requestApproval({
+      id: "approval-1",
+      taskId: task.id,
+      projectId: "openclaw",
+      message: "Run command?\n[y/n]",
+      status: "pending",
+      createdAt: new Date().toISOString()
+    });
+
+    const pending = await request(app).get("/api/approvals?status=pending").set("Authorization", "Bearer panel-token").expect(200);
+    expect(pending.body.approvals).toHaveLength(1);
+
+    await request(app).post("/api/approvals/approval-1/approve").set("Authorization", "Bearer panel-token").expect(200);
+    expect(store.getTask(task.id)?.status).toBe("running");
   });
 });

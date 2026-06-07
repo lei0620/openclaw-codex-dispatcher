@@ -11,8 +11,11 @@ $ZipPath = Join-Path $OutputPath $PackageName
 
 $excludedPathParts = @(
   ".git",
+  ".gradle",
+  ".learnings",
   ".codex-ssh-tmp",
   "node_modules",
+  "build",
   "dist",
   "logs",
   "data",
@@ -25,6 +28,9 @@ $excludedFiles = @(
   "docker-compose.yml",
   "config/dispatcher.config.json",
   "config/agent.local.config.json",
+  "android/local.properties",
+  "android/app/src/main/assets/capacitor.config.json",
+  "android/app/src/main/assets/capacitor.plugins.json",
   "scripts/start-agent.local.ps1",
   "setup-output.txt"
 )
@@ -55,7 +61,13 @@ function Should-Exclude {
   if ($excludedFiles -contains $unixPath) {
     return $true
   }
-  if ($unixPath.EndsWith(".zip")) {
+  if ($unixPath.StartsWith("public/downloads/")) {
+    return $true
+  }
+  if ($unixPath.StartsWith("android/app/src/main/assets/public/")) {
+    return $true
+  }
+  if ($unixPath.EndsWith(".zip") -or $unixPath.EndsWith(".apk") -or $unixPath.EndsWith(".aab") -or $unixPath.EndsWith(".aar")) {
     return $true
   }
 

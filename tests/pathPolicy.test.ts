@@ -28,6 +28,19 @@ const config: DispatcherConfig = {
     command: "codex",
     args: ["exec", "{{prompt}}"],
     promptStdin: false
+  },
+  codexAppServer: {
+    enabled: false,
+    url: "ws://127.0.0.1:8765",
+    startupTimeoutMs: 8000,
+    requestTimeoutMs: 30000
+  },
+  desktopInput: {
+    enabled: false,
+    scriptPath: "scripts/send-codex-desktop-input.ps1",
+    clickYOffset: 92,
+    windowTitlePattern: "Codex|OpenAI",
+    responseTimeoutMs: 180000
   }
 };
 

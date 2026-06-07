@@ -2,12 +2,13 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>手机遥控 Codex</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <div id="sidebar-scrim" class="sidebar-scrim" hidden></div>
+    <div id="settings-scrim" class="settings-scrim" hidden></div>
     <main class="app-shell">
       <aside id="conversation-sidebar" class="conversation-sidebar" aria-label="项目和对话">
         <div class="sidebar-header">
@@ -35,32 +36,20 @@
             </div>
           </div>
           <div class="connection">
-            <span id="status" class="status-pill">正在连接</span>
-            <button id="refresh" type="button">刷新</button>
+            <span id="status-icon" class="computer-status pending" role="img" aria-label="正在连接" title="正在连接">
+              <span class="computer-mark" aria-hidden="true"></span>
+            </span>
+            <button id="sync-conversations" class="icon-button sync-open" type="button" aria-label="同步电脑 Codex 对话" title="同步电脑 Codex 对话">
+              <span class="sync-mark" aria-hidden="true"></span>
+            </button>
+            <button id="settings-open" class="icon-button settings-open" type="button" aria-label="打开设置">
+              <span class="settings-mark" aria-hidden="true"></span>
+            </button>
           </div>
         </header>
 
-        <section class="setup-panel" aria-label="连接设置">
-          <label class="token-field">
-            访问密码
-            <input id="token" type="password" autocomplete="off" placeholder="输入一次后会保存在本机浏览器" />
-          </label>
-          <button id="save-token" type="button">保存密码</button>
-          <label>
-            执行方式
-            <select id="mode"></select>
-          </label>
-        </section>
-
-        <section class="agent-panel" aria-label="我的 Win11 电脑">
-          <div>
-            <h2>我的 Win11 电脑</h2>
-            <p>这里显示哪台电脑正在等你发任务。</p>
-          </div>
-          <div id="agents" class="agent-list"></div>
-        </section>
-
         <section class="chat-panel" aria-label="Codex 对话">
+          <div id="approval-inbox" class="approval-inbox" hidden></div>
           <div id="messages" class="messages" aria-live="polite"></div>
           <form id="chat-form" class="chat-form">
             <textarea
@@ -69,13 +58,69 @@
               placeholder="直接输入给 Codex 的话，比如：帮我检查这个项目怎么启动"
             ></textarea>
             <div class="chat-actions">
-              <p>第一次建议选“只测试连接”，确认 Win11 能收到任务后再正式执行。</p>
               <button id="submit" type="submit">发送给 Codex</button>
             </div>
           </form>
         </section>
       </section>
     </main>
+    <aside id="settings-panel" class="settings-panel" aria-label="设置" hidden>
+      <header class="settings-header">
+        <div>
+          <h2>设置</h2>
+          <p>连接、执行方式和更新</p>
+        </div>
+        <button id="settings-close" class="icon-button" type="button" aria-label="关闭设置">
+          <span class="close-mark" aria-hidden="true"></span>
+        </button>
+      </header>
+
+      <section class="settings-section">
+        <h3>我的 Win11 电脑</h3>
+        <div class="settings-status-row">
+          <span id="status" class="status-text">正在连接</span>
+          <button id="refresh" class="secondary compact-button" type="button">刷新</button>
+        </div>
+        <div id="agents" class="agent-list"></div>
+        <label>
+          服务地址
+          <input id="api-base" type="url" autocomplete="off" placeholder="http://192.168.101.8:1314" />
+        </label>
+        <div class="settings-actions">
+          <button id="save-api-base" class="secondary" type="button">保存服务地址</button>
+          <button id="reset-api-base" class="secondary" type="button">恢复局域网地址</button>
+        </div>
+        <label class="token-field">
+          访问密码
+          <input id="token" type="password" autocomplete="off" placeholder="输入一次后会保存在本机浏览器" />
+        </label>
+        <div class="settings-actions">
+          <button id="save-token" type="button">保存密码</button>
+          <button id="reset-token" class="secondary" type="button">恢复默认密码</button>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <h3>任务</h3>
+        <label>
+          执行方式
+          <select id="mode"></select>
+        </label>
+        <label class="settings-toggle">
+          <span>自动切到桌面最新对话（与最新会话保持同步）</span>
+          <input id="auto-follow-conversation" type="checkbox" checked />
+        </label>
+      </section>
+
+      <section class="settings-section">
+        <h3>应用更新</h3>
+        <div class="settings-actions">
+          <button id="check-update" class="secondary" type="button" hidden>检查更新</button>
+          <button id="install-update" type="button" hidden>立即升级</button>
+        </div>
+        <p id="update-status" class="update-status" hidden></p>
+      </section>
+    </aside>
     <script src="/app.js" type="module"></script>
   </body>
 </html>

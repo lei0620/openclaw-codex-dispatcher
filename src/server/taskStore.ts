@@ -4,22 +4,27 @@ import fs from "node:fs";
 import path from "node:path";
 import type {
   AgentRecord,
+  ApprovalRecord,
+  ApprovalStatus,
   ConversationRecord,
   CreateTaskInput,
   ProjectConfig,
+  SyncedCodexConversation,
   TaskLogStream,
   TaskRecord,
   TaskResult,
   TaskSource
 } from "../shared/types.js";
 
-type TaskStoreEvents = "task.created" | "task.updated" | "task.cancelRequested" | "agent.updated";
+type TaskStoreEvents = "task.created" | "task.updated" | "task.cancelRequested" | "agent.updated" | "approval.resolved";
+type TaskStoreControlEvents = "codex.syncRequested" | "codex.synced";
 
 export class TaskStore extends EventEmitter {
   private readonly tasks = new Map<string, TaskRecord>();
   private readonly order: string[] = [];
   private readonly conversations = new Map<string, ConversationRecord>();
   private readonly conversationOrder: string[] = [];
+  private readonly approvals = new Map<string, ApprovalRecord>();
   private readonly agents = new Map<string, AgentRecord>();
   private readonly agentProjects = new Map<string, ProjectConfig[]>();
   private readonly storagePath?: string;
@@ -37,7 +42,8 @@ export class TaskStore extends EventEmitter {
       projectId: input.projectId,
       title: normalizeTitle(input.title) || "新对话",
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      source: "panel"
     };
     this.conversations.set(conversation.id, conversation);
     this.conversationOrder.push(conversation.id);
@@ -45,12 +51,14 @@ export class TaskStore extends EventEmitter {
     return structuredClone(conversation);
   }
 
-  listConversations(projectId?: string): ConversationRecord[] {
+  listConversations(projectId?: string, limit?: number): ConversationRecord[] {
     return this.conversationOrder
       .map((id) => this.conversations.get(id))
       .filter((conversation): conversation is ConversationRecord => Boolean(conversation))
       .filter((conversation) => !projectId || conversation.projectId === projectId)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, limit && Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : undefined)
+      .filter((conversation): conversation is ConversationRecord => Boolean(conversation))
       .map((conversation) => structuredClone(conversation));
   }
 
@@ -59,13 +67,46 @@ export class TaskStore extends EventEmitter {
     return conversation ? structuredClone(conversation) : undefined;
   }
 
+  upsertCodexConversations(input: SyncedCodexConversation[]): ConversationRecord[] {
+    const records: ConversationRecord[] = [];
+    for (const item of input) {
+      const existingBySession = [...this.conversations.values()].find((conversation) => conversation.codexSessionId === item.sessionId);
+      const id = existingBySession?.id ?? codexConversationId(item.sessionId);
+      const existing = this.conversations.get(id);
+      const updatedAt =
+        existing && existing.updatedAt.localeCompare(item.updatedAt) > 0 ? existing.updatedAt : item.updatedAt;
+      const record: ConversationRecord = {
+        id,
+        projectId: item.projectId,
+        title: normalizeTitle(item.title) || "Codex 对话",
+        createdAt: existing?.createdAt ?? item.updatedAt,
+        updatedAt,
+        source: "codex",
+        codexSessionId: item.sessionId,
+        messages: item.messages
+      };
+      this.conversations.set(id, record);
+      if (!this.conversationOrder.includes(id)) {
+        this.conversationOrder.push(id);
+      }
+      records.push(structuredClone(record));
+    }
+    if (records.length > 0) {
+      this.save();
+    }
+    this.emit("codex.synced");
+    return records;
+  }
+
   createTask(input: CreateTaskInput & { mode: string; source?: TaskSource; conversationId?: string }): TaskRecord {
     const now = new Date().toISOString();
     const conversationId = input.conversationId ?? this.createConversation({ projectId: input.projectId, title: input.prompt }).id;
+    const conversation = this.conversations.get(conversationId);
     const task: TaskRecord = {
       id: randomUUID(),
       projectId: input.projectId,
       conversationId,
+      codexSessionId: conversation?.codexSessionId,
       prompt: input.prompt,
       mode: input.mode,
       source: input.source ?? "api",
@@ -125,10 +166,31 @@ export class TaskStore extends EventEmitter {
     return task;
   }
 
+  requestApproval(approval: ApprovalRecord): TaskRecord {
+    const task = this.requireTask(approval.taskId);
+    const record: ApprovalRecord = {
+      ...approval,
+      agentId: approval.agentId ?? task.agentId,
+      projectId: task.projectId,
+      status: "pending"
+    };
+    task.status = "waiting_approval";
+    task.pendingApproval = record;
+    task.updatedAt = new Date().toISOString();
+    this.approvals.set(record.id, record);
+    this.save();
+    this.emitChange("task.updated", task);
+    return task;
+  }
+
   completeTask(taskId: string, result: TaskResult): TaskRecord {
     const task = this.requireTask(taskId);
     task.status = "completed";
     task.result = result;
+    if (result.codexSessionId) {
+      task.codexSessionId = result.codexSessionId;
+      this.bindConversationToCodexSession(task.conversationId, result.codexSessionId);
+    }
     task.finishedAt = new Date().toISOString();
     task.updatedAt = task.finishedAt;
     this.save();
@@ -174,6 +236,35 @@ export class TaskStore extends EventEmitter {
     return task;
   }
 
+  listApprovals(status?: ApprovalStatus): ApprovalRecord[] {
+    return [...this.approvals.values()]
+      .filter((approval) => !status || approval.status === status)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map((approval) => structuredClone(approval));
+  }
+
+  resolveApproval(approvalId: string, decision: Exclude<ApprovalStatus, "pending">): ApprovalRecord {
+    const approval = this.approvals.get(approvalId);
+    if (!approval) {
+      throw new Error(`approval not found: ${approvalId}`);
+    }
+    if (approval.status !== "pending") {
+      return structuredClone(approval);
+    }
+    approval.status = decision;
+    approval.respondedAt = new Date().toISOString();
+    const task = this.tasks.get(approval.taskId);
+    if (task?.pendingApproval?.id === approval.id) {
+      task.pendingApproval = undefined;
+      task.status = task.status === "waiting_approval" ? "running" : task.status;
+      task.updatedAt = approval.respondedAt;
+      this.emitChange("task.updated", task);
+    }
+    this.save();
+    this.emitChange("approval.resolved", approval);
+    return structuredClone(approval);
+  }
+
   upsertAgent(agentId: string): AgentRecord {
     const now = new Date().toISOString();
     const agent = this.agents.get(agentId) ?? { id: agentId, online: true, connectedAt: now, lastSeenAt: now };
@@ -217,8 +308,29 @@ export class TaskStore extends EventEmitter {
     return [...projects.values()];
   }
 
-  onStoreEvent(event: TaskStoreEvents, listener: (record: TaskRecord | AgentRecord) => void): void {
+  onStoreEvent(event: TaskStoreEvents, listener: (record: TaskRecord | AgentRecord | ApprovalRecord) => void): void {
     this.on(event, listener);
+  }
+
+  onControlEvent(event: TaskStoreControlEvents, listener: () => void): void {
+    this.on(event, listener);
+  }
+
+  requestCodexSessionSync(): void {
+    this.emit("codex.syncRequested");
+  }
+
+  waitForCodexSessionSync(timeoutMs = 2500): Promise<void> {
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        this.off("codex.synced", onSynced);
+        resolve();
+      };
+      const onSynced = () => done();
+      const timer = setTimeout(done, timeoutMs);
+      this.once("codex.synced", onSynced);
+    });
   }
 
   private requireTask(taskId: string): TaskRecord {
@@ -229,7 +341,7 @@ export class TaskStore extends EventEmitter {
     return task;
   }
 
-  private emitChange(event: TaskStoreEvents, record: TaskRecord | AgentRecord): void {
+  private emitChange(event: TaskStoreEvents, record: TaskRecord | AgentRecord | ApprovalRecord): void {
     this.emit(event, structuredClone(record));
   }
 
@@ -238,10 +350,22 @@ export class TaskStore extends EventEmitter {
     if (!conversation) {
       return;
     }
-    if (conversation.title === "新对话") {
+    if (conversation.source !== "codex" && conversation.title === "新对话") {
       conversation.title = prompt.slice(0, 32);
     }
     conversation.updatedAt = updatedAt;
+  }
+
+  private bindConversationToCodexSession(conversationId: string | undefined, codexSessionId: string): void {
+    if (!conversationId) {
+      return;
+    }
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) {
+      return;
+    }
+    conversation.source = "codex";
+    conversation.codexSessionId = codexSessionId;
   }
 
   private load(): void {
@@ -257,6 +381,11 @@ export class TaskStore extends EventEmitter {
       this.conversationOrder.push(conversation.id);
     }
     for (const task of raw.tasks ?? []) {
+      if (task.status === "waiting_approval") {
+        task.status = "failed";
+        task.error = "服务重启时仍在等待授权，请重新发送。";
+        task.pendingApproval = undefined;
+      }
       this.tasks.set(task.id, task);
       this.order.push(task.id);
     }
@@ -284,4 +413,8 @@ export class TaskStore extends EventEmitter {
 
 function normalizeTitle(title: string | undefined): string {
   return (title ?? "").trim().slice(0, 64);
+}
+
+function codexConversationId(sessionId: string): string {
+  return `codex:${sessionId}`;
 }

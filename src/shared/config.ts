@@ -50,7 +50,36 @@ const configSchema = z.object({
     command: z.string().min(1).default("codex"),
     args: z.array(z.string()).default(["exec", "--cd", "{{projectPath}}", "{{prompt}}"]),
     promptStdin: z.boolean().default(false)
-  })
+  }),
+  codexAppServer: z
+    .object({
+      enabled: z.boolean().default(false),
+      url: z.string().url().default("ws://127.0.0.1:18765"),
+      command: z.string().min(1).optional(),
+      startupTimeoutMs: z.coerce.number().int().positive().default(8000),
+      requestTimeoutMs: z.coerce.number().int().positive().default(30000)
+    })
+    .default({
+      enabled: false,
+      url: "ws://127.0.0.1:18765",
+      startupTimeoutMs: 8000,
+      requestTimeoutMs: 30000
+    }),
+  desktopInput: z
+    .object({
+      enabled: z.boolean().default(false),
+      scriptPath: z.string().min(1).default("scripts/send-codex-desktop-input.ps1"),
+      clickYOffset: z.coerce.number().int().positive().default(92),
+      windowTitlePattern: z.string().min(1).default("Codex|OpenAI"),
+      responseTimeoutMs: z.coerce.number().int().positive().default(180000)
+    })
+    .default({
+      enabled: false,
+      scriptPath: "scripts/send-codex-desktop-input.ps1",
+      clickYOffset: 92,
+      windowTitlePattern: "Codex|OpenAI",
+      responseTimeoutMs: 180000
+    })
 });
 
 export function loadDispatcherConfig(configPath = process.env.OPENCLAW_CONFIG ?? "config/dispatcher.config.json"): DispatcherConfig {
@@ -86,6 +115,33 @@ export function loadDispatcherConfig(configPath = process.env.OPENCLAW_CONFIG ??
       promptStdin: process.env.CODEX_PROMPT_STDIN
         ? process.env.CODEX_PROMPT_STDIN === "1" || process.env.CODEX_PROMPT_STDIN.toLowerCase() === "true"
         : parsed.codex.promptStdin
+    },
+    codexAppServer: {
+      enabled: process.env.CODEX_APP_SERVER_ENABLED
+        ? process.env.CODEX_APP_SERVER_ENABLED === "1" || process.env.CODEX_APP_SERVER_ENABLED.toLowerCase() === "true"
+        : parsed.codexAppServer.enabled,
+      url: process.env.CODEX_APP_SERVER_URL ?? parsed.codexAppServer.url,
+      command: process.env.CODEX_APP_SERVER_COMMAND ?? parsed.codexAppServer.command,
+      startupTimeoutMs: process.env.CODEX_APP_SERVER_STARTUP_TIMEOUT_MS
+        ? Number(process.env.CODEX_APP_SERVER_STARTUP_TIMEOUT_MS)
+        : parsed.codexAppServer.startupTimeoutMs,
+      requestTimeoutMs: process.env.CODEX_APP_SERVER_REQUEST_TIMEOUT_MS
+        ? Number(process.env.CODEX_APP_SERVER_REQUEST_TIMEOUT_MS)
+        : parsed.codexAppServer.requestTimeoutMs
+    },
+    desktopInput: {
+      enabled: process.env.CODEX_DESKTOP_INPUT_ENABLED
+        ? process.env.CODEX_DESKTOP_INPUT_ENABLED === "1" ||
+          process.env.CODEX_DESKTOP_INPUT_ENABLED.toLowerCase() === "true"
+        : parsed.desktopInput.enabled,
+      scriptPath: process.env.CODEX_DESKTOP_INPUT_SCRIPT ?? parsed.desktopInput.scriptPath,
+      clickYOffset: process.env.CODEX_DESKTOP_INPUT_CLICK_Y_OFFSET
+        ? Number(process.env.CODEX_DESKTOP_INPUT_CLICK_Y_OFFSET)
+        : parsed.desktopInput.clickYOffset,
+      windowTitlePattern: process.env.CODEX_DESKTOP_INPUT_WINDOW_TITLE_PATTERN ?? parsed.desktopInput.windowTitlePattern,
+      responseTimeoutMs: process.env.CODEX_DESKTOP_INPUT_RESPONSE_TIMEOUT_MS
+        ? Number(process.env.CODEX_DESKTOP_INPUT_RESPONSE_TIMEOUT_MS)
+        : parsed.desktopInput.responseTimeoutMs
     }
   };
 }
