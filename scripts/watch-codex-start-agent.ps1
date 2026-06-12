@@ -1,7 +1,7 @@
 param(
   [string]$Config = "config/dispatcher.config.json",
   [string]$DispatcherUrl = "http://192.168.101.8:1314",
-  [string]$AgentId = "win11-main",
+  [string]$AgentId = $env:COMPUTERNAME,
   [int]$IntervalSeconds = 8
 )
 
