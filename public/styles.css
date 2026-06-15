@@ -579,6 +579,37 @@ p {
   padding: 8px 12px;
 }
 
+.version-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.version-card div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.version-card span,
+.version-card p {
+  color: var(--muted);
+}
+
+.version-card p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.version-card strong {
+  color: var(--text);
+}
+
 .update-status {
   border: 1px solid var(--line);
   border-radius: 8px;

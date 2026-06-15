@@ -1,5 +1,7 @@
 const lanApiBase = "http://192.168.101.8:1314";
 const defaultDispatcherToken = "";
+const appVersion = "1.3.0";
+const releaseNotes = "NAS 重启后自动拉起面板服务；Win11 打开 Codex 后自动上线；设置页增加版本提示。";
 let token = localStorage.getItem("openclawToken") || defaultDispatcherToken;
 let apiBase = getStoredApiBase();
 
@@ -58,6 +60,8 @@ const els = {
   checkUpdate: document.querySelector("#check-update"),
   installUpdate: document.querySelector("#install-update"),
   updateStatus: document.querySelector("#update-status"),
+  appVersion: document.querySelector("#app-version"),
+  releaseNotes: document.querySelector("#release-notes"),
   token: document.querySelector("#token"),
   apiBase: document.querySelector("#api-base"),
   saveApiBase: document.querySelector("#save-api-base"),
@@ -122,6 +126,7 @@ els.settingsClose.addEventListener("click", closeSettings);
 els.settingsScrim.addEventListener("click", closeSettings);
 
 initAndroidUpdateControls();
+renderAppVersion();
 await refresh();
 setInterval(() => refresh(), 2000);
 
@@ -159,6 +164,15 @@ function initAndroidUpdateControls() {
     return;
   }
   els.checkUpdate.hidden = false;
+}
+
+function renderAppVersion() {
+  if (els.appVersion) {
+    els.appVersion.textContent = `v${appVersion}`;
+  }
+  if (els.releaseNotes) {
+    els.releaseNotes.textContent = releaseNotes;
+  }
 }
 
 async function checkAndroidUpdate() {
