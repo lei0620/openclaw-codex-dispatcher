@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildCodexSpawn, detectApprovalPrompt, runCodexTask } from "../src/agent/runner.js";
+import { buildCodexSpawn, detectApprovalPrompt, selectCodexExecutionPlan, runCodexTask } from "../src/agent/runner.js";
 import type { ProjectConfig, TaskRecord } from "../src/shared/types.js";
 
 describe("buildCodexSpawn", () => {
@@ -85,6 +85,43 @@ describe("buildCodexSpawn", () => {
     expect(detectApprovalPrompt("ordinary task output")).toBeUndefined();
   });
 
+  it("prefers the session-aware app-server over foreground desktop input", () => {
+    const task = createRunnerTask({ source: "panel", codexSessionId: "019ea06b-17d8-7a32-8106-334d3ae55286" });
+
+    expect(
+      selectCodexExecutionPlan(
+        { enabled: true, url: "ws://127.0.0.1:18765", startupTimeoutMs: 8000, requestTimeoutMs: 30000 },
+        {
+          enabled: true,
+          allowUnsafeForegroundRouting: true,
+          scriptPath: "scripts/send-codex-desktop-input.ps1",
+          clickYOffset: 92,
+          windowTitlePattern: "Codex|OpenAI",
+          responseTimeoutMs: 180000
+        },
+        task
+      )
+    ).toEqual(["app-server", "desktop-input", "cli"]);
+  });
+
+  it("does not use unsafe foreground desktop input for phone-created tasks by default", () => {
+    const task = createRunnerTask({ source: "panel" });
+
+    expect(
+      selectCodexExecutionPlan(
+        { enabled: false, url: "ws://127.0.0.1:18765", startupTimeoutMs: 8000, requestTimeoutMs: 30000 },
+        {
+          enabled: true,
+          scriptPath: "scripts/send-codex-desktop-input.ps1",
+          clickYOffset: 92,
+          windowTitlePattern: "Codex|OpenAI",
+          responseTimeoutMs: 180000
+        },
+        task
+      )
+    ).toEqual(["cli"]);
+  });
+
   it("closes stdin even when the prompt is passed as an argument", async () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-runner-"));
     const task: TaskRecord = {
@@ -137,3 +174,18 @@ describe("buildCodexSpawn", () => {
     expect(logs.join("")).toContain("stdin closed");
   });
 });
+
+function createRunnerTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
+  return {
+    id: "task-1",
+    projectId: "project-1",
+    prompt: "hello",
+    mode: "codex",
+    source: "panel",
+    status: "running",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    logs: [],
+    ...overrides
+  };
+}

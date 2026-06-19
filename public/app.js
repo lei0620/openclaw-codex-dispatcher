@@ -1,7 +1,7 @@
 const lanApiBase = "http://192.168.101.8:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.3.2";
-const releaseNotes = "聊天页顶部新增正在执行会话列表，可直接切换到运行中、等待授权或排队中的对话。";
+const appVersion = "1.3.3";
+const releaseNotes = "修复手机消息误发到电脑当前 Codex 对话的问题，默认改用会话安全通道发送任务。";
 let token = localStorage.getItem("openclawToken") || defaultDispatcherToken;
 let apiBase = getStoredApiBase();
 

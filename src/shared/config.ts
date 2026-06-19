@@ -68,6 +68,7 @@ const configSchema = z.object({
   desktopInput: z
     .object({
       enabled: z.boolean().default(false),
+      allowUnsafeForegroundRouting: z.boolean().default(false),
       scriptPath: z.string().min(1).default("scripts/send-codex-desktop-input.ps1"),
       clickYOffset: z.coerce.number().int().positive().default(92),
       windowTitlePattern: z.string().min(1).default("Codex|OpenAI"),
@@ -75,6 +76,7 @@ const configSchema = z.object({
     })
     .default({
       enabled: false,
+      allowUnsafeForegroundRouting: false,
       scriptPath: "scripts/send-codex-desktop-input.ps1",
       clickYOffset: 92,
       windowTitlePattern: "Codex|OpenAI",
@@ -134,6 +136,10 @@ export function loadDispatcherConfig(configPath = process.env.OPENCLAW_CONFIG ??
         ? process.env.CODEX_DESKTOP_INPUT_ENABLED === "1" ||
           process.env.CODEX_DESKTOP_INPUT_ENABLED.toLowerCase() === "true"
         : parsed.desktopInput.enabled,
+      allowUnsafeForegroundRouting: process.env.CODEX_DESKTOP_INPUT_ALLOW_UNSAFE_FOREGROUND
+        ? process.env.CODEX_DESKTOP_INPUT_ALLOW_UNSAFE_FOREGROUND === "1" ||
+          process.env.CODEX_DESKTOP_INPUT_ALLOW_UNSAFE_FOREGROUND.toLowerCase() === "true"
+        : parsed.desktopInput.allowUnsafeForegroundRouting,
       scriptPath: process.env.CODEX_DESKTOP_INPUT_SCRIPT ?? parsed.desktopInput.scriptPath,
       clickYOffset: process.env.CODEX_DESKTOP_INPUT_CLICK_Y_OFFSET
         ? Number(process.env.CODEX_DESKTOP_INPUT_CLICK_Y_OFFSET)

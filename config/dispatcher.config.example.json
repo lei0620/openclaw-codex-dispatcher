@@ -47,6 +47,7 @@
   },
   "desktopInput": {
     "enabled": true,
+    "allowUnsafeForegroundRouting": false,
     "scriptPath": "scripts/send-codex-desktop-input.ps1",
     "clickYOffset": 92,
     "windowTitlePattern": "Codex|OpenAI",

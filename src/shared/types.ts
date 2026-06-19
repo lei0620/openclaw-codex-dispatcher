@@ -40,6 +40,7 @@ export interface CodexAppServerConfig {
 
 export interface DesktopInputConfig {
   enabled: boolean;
+  allowUnsafeForegroundRouting?: boolean;
   scriptPath: string;
   clickYOffset: number;
   windowTitlePattern: string;

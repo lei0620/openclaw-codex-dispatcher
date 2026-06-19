@@ -27,6 +27,8 @@ interface SpawnSpec {
   stdin?: string;
 }
 
+type CodexExecutionStrategy = "app-server" | "desktop-input" | "cli";
+
 export function buildCodexSpawn(config: CodexCommandConfig, context: BuildContext): SpawnSpec {
   const args = config.args.map((arg) => replaceTemplate(arg, context));
   if (context.codexSessionId) {
@@ -37,6 +39,25 @@ export function buildCodexSpawn(config: CodexCommandConfig, context: BuildContex
     args,
     stdin: config.promptStdin ? context.prompt : undefined
   };
+}
+
+export function selectCodexExecutionPlan(
+  appServer: CodexAppServerConfig,
+  desktopInput: DesktopInputConfig,
+  task: TaskRecord
+): CodexExecutionStrategy[] {
+  if (task.mode !== "codex") {
+    return ["cli"];
+  }
+  const plan: CodexExecutionStrategy[] = [];
+  if (appServer.enabled) {
+    plan.push("app-server");
+  }
+  if (desktopInput.enabled && desktopInput.allowUnsafeForegroundRouting) {
+    plan.push("desktop-input");
+  }
+  plan.push("cli");
+  return plan;
 }
 
 export async function runCodexTask(
@@ -55,35 +76,52 @@ export async function runCodexTask(
   }
 
   const codexSessionId = getCodexSessionId(task);
-  if (desktopInput.enabled && task.mode === "codex") {
-    try {
-      return await runDesktopInputTask(desktopInput, task, project, signal, onLog);
-    } catch (error) {
-      if (signal.aborted) {
-        return { exitCode: 1, summary: "Cancelled by request.", diffSummary: "not checked" };
+  const plan = selectCodexExecutionPlan(appServer, desktopInput, task);
+  for (const strategy of plan) {
+    if (strategy === "app-server") {
+      try {
+        const result = await runCodexAppServerTask(appServer, codexSessionId, task, project, signal, onLog, onApproval);
+        return { ...result, diffSummary: await readDiffSummary(project.path) };
+      } catch (error) {
+        if (signal.aborted) {
+          return { exitCode: 1, summary: "Cancelled by request.", diffSummary: "not checked" };
+        }
+        onLog(
+          "system",
+          `desktop app-server unavailable; falling back to next safe runner: ${error instanceof Error ? error.message : String(error)}`
+        );
       }
-      onLog(
-        "system",
-        `desktop input unavailable; falling back to desktop app-server: ${error instanceof Error ? error.message : String(error)}`
-      );
+      continue;
     }
+    if (strategy === "desktop-input") {
+      try {
+        return await runDesktopInputTask(desktopInput, task, project, signal, onLog);
+      } catch (error) {
+        if (signal.aborted) {
+          return { exitCode: 1, summary: "Cancelled by request.", diffSummary: "not checked" };
+        }
+        onLog(
+          "system",
+          `unsafe foreground desktop input unavailable; falling back to Codex CLI: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+      continue;
+    }
+    return await runCodexCliTask(codex, codexSessionId, task, project, signal, onLog, onApproval);
   }
 
-  if (appServer.enabled && task.mode === "codex") {
-    try {
-      const result = await runCodexAppServerTask(appServer, codexSessionId, task, project, signal, onLog, onApproval);
-      return { ...result, diffSummary: await readDiffSummary(project.path) };
-    } catch (error) {
-      if (signal.aborted) {
-        return { exitCode: 1, summary: "Cancelled by request.", diffSummary: "not checked" };
-      }
-      onLog(
-        "system",
-        `desktop app-server unavailable; falling back to Codex CLI: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-  }
+  return await runCodexCliTask(codex, codexSessionId, task, project, signal, onLog, onApproval);
+}
 
+async function runCodexCliTask(
+  codex: CodexCommandConfig,
+  codexSessionId: string | undefined,
+  task: TaskRecord,
+  project: ProjectConfig,
+  signal: AbortSignal,
+  onLog: (stream: TaskLogStream, text: string) => void,
+  onApproval?: (message: string) => Promise<boolean>
+): Promise<TaskResult> {
   const spec = buildCodexSpawn(codex, {
     projectPath: project.path,
     prompt: task.prompt,
