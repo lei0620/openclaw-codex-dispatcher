@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isCodexContextMessage, selectRecentConversationMessages } from "../src/agent/codexSessions.js";
+import { stripInternalMarkup } from "../src/shared/textSanitizer.js";
 import type { ConversationMessage } from "../src/shared/types.js";
 
 describe("selectRecentConversationMessages", () => {
@@ -55,5 +56,11 @@ describe("selectRecentConversationMessages", () => {
 
   it("filters internal continuation context messages", () => {
     expect(isCodexContextMessage("<goal_context>\nContinue working toward the active thread goal.")).toBe(true);
+  });
+
+  it("removes internal memory citation markup from display text", () => {
+    expect(
+      stripInternalMarkup(`收到了，这次是实时进来的。\n\n<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-3|note=[x]\n</citation_entries>\n</oai-mem-citation>`)
+    ).toBe("收到了，这次是实时进来的。");
   });
 });

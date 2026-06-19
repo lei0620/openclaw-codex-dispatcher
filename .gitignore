@@ -1,4 +1,5 @@
 node_modules/
+.codex_tmp_node/
 dist/
 .learnings/
 .env

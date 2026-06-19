@@ -286,6 +286,35 @@ export class TaskStore extends EventEmitter {
     return agent;
   }
 
+  stopActiveTasksForAgent(agentId: string, reason = "电脑代理已离线，任务已中断，请重新发送。"): TaskRecord[] {
+    const stopped: TaskRecord[] = [];
+    const finishedAt = new Date().toISOString();
+    for (const task of this.tasks.values()) {
+      if (task.agentId !== agentId) {
+        continue;
+      }
+      if (!["running", "waiting_approval", "cancelling"].includes(task.status)) {
+        continue;
+      }
+      if (task.status === "cancelling") {
+        task.status = "cancelled";
+        task.error = "cancelled by agent disconnect";
+      } else {
+        task.status = "failed";
+        task.error = reason;
+      }
+      task.pendingApproval = undefined;
+      task.finishedAt = finishedAt;
+      task.updatedAt = finishedAt;
+      stopped.push(structuredClone(task));
+      this.emitChange("task.updated", task);
+    }
+    if (stopped.length > 0) {
+      this.save();
+    }
+    return stopped;
+  }
+
   listAgents(): AgentRecord[] {
     return [...this.agents.values()];
   }

@@ -36,6 +36,19 @@ describe("mobile panel copy", () => {
     expect(js).toContain("data-conversation-id");
   });
 
+  it("shows active running conversations near the chat top for quick switching", () => {
+    const html = fs.readFileSync("public/index.html", "utf8");
+    const js = fs.readFileSync("public/app.js", "utf8");
+    const css = fs.readFileSync("public/styles.css", "utf8");
+
+    expect(html).toContain("active-sessions");
+    expect(js).toContain("renderActiveSessions");
+    expect(js).toContain("switchActiveTaskConversation");
+    expect(js).toContain("waiting_approval");
+    expect(css).toContain(".active-sessions");
+    expect(css).toContain(".active-session-card");
+  });
+
   it("separates Codex answers from task status details", () => {
     const js = fs.readFileSync("public/app.js", "utf8");
     const css = fs.readFileSync("public/styles.css", "utf8");

@@ -35,4 +35,17 @@ describe("TaskStore", () => {
     expect(cancelled.status).toBe("cancelling");
     expect(cancelled.cancelRequestedAt).toBeTruthy();
   });
+
+  it("settles active agent tasks when the agent disconnects", () => {
+    const store = new TaskStore();
+    const task = store.createTask({ projectId: "openclaw", prompt: "stuck task", mode: "codex", source: "panel" });
+    store.assignNextTask("win11-main");
+    store.requestCancel(task.id);
+
+    const stopped = store.stopActiveTasksForAgent("win11-main");
+
+    expect(stopped).toHaveLength(1);
+    expect(store.getTask(task.id)?.status).toBe("cancelled");
+    expect(store.getTask(task.id)?.finishedAt).toBeTruthy();
+  });
 });

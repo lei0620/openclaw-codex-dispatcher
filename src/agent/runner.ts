@@ -54,12 +54,22 @@ export async function runCodexTask(
     return { exitCode: 0, summary: "Dry run completed without invoking Codex.", diffSummary: "not checked" };
   }
 
+  const codexSessionId = getCodexSessionId(task);
   if (desktopInput.enabled && task.mode === "codex") {
-    return await runDesktopInputTask(desktopInput, task, project, signal, onLog);
+    try {
+      return await runDesktopInputTask(desktopInput, task, project, signal, onLog);
+    } catch (error) {
+      if (signal.aborted) {
+        return { exitCode: 1, summary: "Cancelled by request.", diffSummary: "not checked" };
+      }
+      onLog(
+        "system",
+        `desktop input unavailable; falling back to desktop app-server: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 
-  const codexSessionId = getCodexSessionId(task);
-  if (appServer.enabled) {
+  if (appServer.enabled && task.mode === "codex") {
     try {
       const result = await runCodexAppServerTask(appServer, codexSessionId, task, project, signal, onLog, onApproval);
       return { ...result, diffSummary: await readDiffSummary(project.path) };

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ConversationMessage, ProjectConfig, SyncedCodexConversation } from "../shared/types.js";
+import { stripInternalMarkup } from "../shared/textSanitizer.js";
 
 interface IndexedSession {
   id: string;
@@ -208,7 +209,7 @@ function extractMessageText(content: unknown): string {
 }
 
 function trimMessage(text: string): string {
-  const normalized = text.trim();
+  const normalized = stripInternalMarkup(text);
   return normalized.length > 800 ? `${normalized.slice(0, 800)}...` : normalized;
 }
 

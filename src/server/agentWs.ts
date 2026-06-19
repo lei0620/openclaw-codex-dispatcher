@@ -78,6 +78,7 @@ export function attachAgentWebSocketServer({ server, config, store }: AgentWsDep
       if (!agentId) {
         return;
       }
+      store.stopActiveTasksForAgent(agentId);
       agents.delete(agentId);
       store.markAgentOffline(agentId);
     });

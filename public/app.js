@@ -1,7 +1,7 @@
 const lanApiBase = "http://192.168.101.8:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.3.0";
-const releaseNotes = "NAS 重启后自动拉起面板服务；Win11 打开 Codex 后自动上线；设置页增加版本提示。";
+const appVersion = "1.3.2";
+const releaseNotes = "聊天页顶部新增正在执行会话列表，可直接切换到运行中、等待授权或排队中的对话。";
 let token = localStorage.getItem("openclawToken") || defaultDispatcherToken;
 let apiBase = getStoredApiBase();
 
@@ -15,17 +15,21 @@ const state = {
   projects: [],
   conversations: [],
   tasks: [],
+  activeTasks: [],
   approvals: [],
   agents: [],
   activeProjectId: localStorage.getItem(selectionKeys.project) || "",
   activeConversationId: localStorage.getItem(selectionKeys.conversation) || "",
-  autoFollowConversation: localStorage.getItem(selectionKeys.autoFollowConversation) !== "0"
+  autoFollowConversation: localStorage.getItem(selectionKeys.autoFollowConversation) !== "0",
+  approvalInboxOpen: false
 };
 
 const scrollState = {
   activeConversationId: "",
   forceBottom: true
 };
+
+let knownPendingApprovalIds = new Set();
 
 const modeLabels = {
   "dry-run": "只测试连接",
@@ -70,7 +74,10 @@ const els = {
   resetToken: document.querySelector("#reset-token"),
   agents: document.querySelector("#agents"),
   messages: document.querySelector("#messages"),
+  activeSessions: document.querySelector("#active-sessions"),
   approvalInbox: document.querySelector("#approval-inbox"),
+  approvalToggle: document.querySelector("#approval-toggle"),
+  approvalCount: document.querySelector("#approval-count"),
   currentProjectName: document.querySelector("#current-project-name"),
   conversationTitle: document.querySelector("#conversation-title"),
   conversationList: document.querySelector("#conversation-list"),
@@ -121,6 +128,7 @@ els.newConversation.addEventListener("click", () => createNewConversation());
 els.sidebarToggle.addEventListener("click", openSidebar);
 els.sidebarClose.addEventListener("click", closeSidebar);
 els.sidebarScrim.addEventListener("click", closeSidebar);
+els.approvalToggle.addEventListener("click", toggleApprovalInbox);
 els.settingsOpen.addEventListener("click", openSettings);
 els.settingsClose.addEventListener("click", closeSettings);
 els.settingsScrim.addEventListener("click", closeSettings);
@@ -248,6 +256,7 @@ async function refresh() {
     state.conversations = conversations;
     state.agents = agents.agents ?? [];
     state.approvals = approvals.approvals ?? [];
+    state.activeTasks = await loadActiveSessionTasks();
     ensureSelection();
     await loadActiveTasks();
     renderAll();
@@ -426,6 +435,13 @@ async function loadActiveTasks() {
   state.tasks = payload.tasks ?? [];
 }
 
+async function loadActiveSessionTasks() {
+  const payload = await api("/api/tasks");
+  return (payload.tasks ?? [])
+    .filter(isActiveTask)
+    .sort(compareActiveTasks);
+}
+
 async function loadRecentProjectConversations(projects) {
   if (!Array.isArray(projects) || projects.length === 0) {
     return [];
@@ -443,6 +459,7 @@ function renderAll() {
   renderModes();
   renderAgents();
   renderApprovals();
+  renderActiveSessions();
   renderConversationSidebar();
   renderMessages();
 }
@@ -451,7 +468,7 @@ function renderHeader() {
   const project = getActiveProject();
   const conversation = getActiveConversation();
   els.currentProjectName.textContent = project ? project.name : "选择项目";
-  els.conversationTitle.textContent = conversation ? conversation.title : "选择一个对话或新建对话";
+  els.conversationTitle.textContent = conversation ? conversation.title : getActiveTaskForConversation(state.activeConversationId)?.prompt ?? "选择一个对话或新建对话";
 }
 
 function renderConversationSidebar() {
@@ -503,6 +520,56 @@ function renderConversationItem(conversation) {
   `;
 }
 
+function renderActiveSessions() {
+  const tasks = state.activeTasks;
+  els.activeSessions.hidden = tasks.length === 0;
+  if (tasks.length === 0) {
+    els.activeSessions.innerHTML = "";
+    return;
+  }
+
+  els.activeSessions.innerHTML = `
+    <div class="active-sessions-title">
+      <strong>正在执行</strong>
+      <span>${tasks.length} 个</span>
+    </div>
+    <div class="active-session-list">
+      ${tasks.map(renderActiveSessionCard).join("")}
+    </div>
+  `;
+  els.activeSessions.querySelectorAll("[data-active-task-id]").forEach((button) => {
+    button.addEventListener("click", () => switchActiveTaskConversation(button.dataset.activeTaskId));
+  });
+}
+
+function renderActiveSessionCard(task) {
+  const project = state.projects.find((item) => item.id === task.projectId);
+  const conversation = state.conversations.find((item) => item.id === task.conversationId);
+  const active = task.conversationId === state.activeConversationId;
+  const title = conversation?.title || task.prompt || "正在执行的对话";
+  return `
+    <button class="active-session-card ${active ? "active" : ""}" data-active-task-id="${escapeHtml(task.id)}" type="button">
+      <span class="active-session-status ${escapeHtml(task.status)}">${escapeHtml(statusLabels[task.status] ?? task.status)}</span>
+      <span class="active-session-main">${escapeHtml(compactText(title, 24))}</span>
+      <span class="active-session-project">${escapeHtml(project?.name ?? task.projectId)}</span>
+    </button>
+  `;
+}
+
+async function switchActiveTaskConversation(taskId) {
+  const task = state.activeTasks.find((item) => item.id === taskId);
+  if (!task?.conversationId) {
+    return;
+  }
+  setAutoFollow(false);
+  state.activeProjectId = task.projectId;
+  state.activeConversationId = task.conversationId;
+  persistSelection();
+  requestMessageScrollToBottom();
+  await loadActiveTasks();
+  renderAll();
+}
+
 function renderModes() {
   const project = getActiveProject();
   if (!project) {
@@ -536,8 +603,24 @@ function renderAgents() {
 
 function renderApprovals() {
   const pending = state.approvals.filter((approval) => approval.status === "pending");
-  els.approvalInbox.hidden = pending.length === 0;
-  els.approvalInbox.innerHTML = pending.map(renderApprovalCard).join("");
+  notifyPendingApprovals(pending);
+  els.approvalToggle.classList.toggle("has-pending", pending.length > 0);
+  els.approvalToggle.setAttribute("aria-expanded", state.approvalInboxOpen ? "true" : "false");
+  els.approvalToggle.setAttribute("aria-label", pending.length > 0 ? `权限收件箱，${pending.length} 条待处理` : "权限收件箱，暂无待处理");
+  els.approvalToggle.title = pending.length > 0 ? `${pending.length} 条权限待处理` : "权限收件箱";
+  els.approvalCount.hidden = pending.length === 0;
+  els.approvalCount.textContent = String(pending.length);
+  els.approvalInbox.hidden = !state.approvalInboxOpen;
+  els.approvalInbox.innerHTML =
+    pending.length > 0
+      ? `
+        <div class="approval-inbox-header">
+          <strong>待处理权限</strong>
+          <span>${pending.length} 条</span>
+        </div>
+        ${pending.map(renderApprovalCard).join("")}
+      `
+      : `<div class="approval-empty">暂无需要处理的权限。</div>`;
   els.approvalInbox.querySelectorAll("[data-approval-approve]").forEach((button) => {
     button.addEventListener("click", () => resolveApproval(button.dataset.approvalApprove, true));
   });
@@ -549,7 +632,10 @@ function renderApprovals() {
 function renderApprovalCard(approval) {
   return `
     <article class="approval-card">
-      <strong>电脑 Codex 正在等待授权</strong>
+      <div class="approval-card-title">
+        <strong>电脑 Codex 正在等待授权</strong>
+        <span>${escapeHtml(approval.projectId)}</span>
+      </div>
       <pre>${escapeHtml(approval.message)}</pre>
       <div class="approval-actions">
         <button class="secondary compact-button" data-approval-deny="${escapeHtml(approval.id)}" type="button">拒绝</button>
@@ -557,6 +643,28 @@ function renderApprovalCard(approval) {
       </div>
     </article>
   `;
+}
+
+function toggleApprovalInbox() {
+  state.approvalInboxOpen = !state.approvalInboxOpen;
+  renderApprovals();
+}
+
+function closeApprovalInbox() {
+  state.approvalInboxOpen = false;
+  renderApprovals();
+}
+
+function notifyPendingApprovals(pending) {
+  const currentIds = new Set(pending.map((approval) => approval.id));
+  const hasNewApproval = pending.some((approval) => !knownPendingApprovalIds.has(approval.id));
+  knownPendingApprovalIds = currentIds;
+  if (!hasNewApproval || pending.length === 0) {
+    return;
+  }
+  if (typeof navigator.vibrate === "function") {
+    navigator.vibrate([80, 40, 80]);
+  }
 }
 
 function renderMessages() {
@@ -686,11 +794,12 @@ function compareTimelineItems(left, right) {
 
 function renderHistoryMessage(message) {
   const isUser = message.role === "user";
+  const text = sanitizeDisplayText(message.text);
   return `
     <article class="message ${isUser ? "user-message" : "codex-message"}">
       <div class="bubble">
         ${isUser ? "" : `<div class="message-name">Codex</div>`}
-        <div class="message-text">${escapeHtml(message.text)}</div>
+        <div class="message-text">${escapeHtml(text)}</div>
       </div>
     </article>
   `;
@@ -729,10 +838,10 @@ function getAnswerText(task, usefulLogs) {
     return "";
   }
   if (usefulLogs.summary) {
-    return usefulLogs.summary;
+    return sanitizeDisplayText(usefulLogs.summary);
   }
   if (task.result?.summary && !isGenericCodexSummary(task.result.summary)) {
-    return task.result.summary;
+    return sanitizeDisplayText(task.result.summary);
   }
   if (task.status === "completed") {
     return "完成了。";
@@ -833,9 +942,16 @@ function getUsefulLogs(task) {
     .trim();
 
   return {
-    summary: stdout,
+    summary: sanitizeDisplayText(stdout),
     raw
   };
+}
+
+function sanitizeDisplayText(value) {
+  return String(value)
+    .replace(/<oai-mem-citation>[\s\S]*?<\/oai-mem-citation>/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function splitLogText(text) {
@@ -851,13 +967,24 @@ function renderEmptyState() {
   els.conversationTitle.textContent = "像和 Codex 聊天一样发任务";
   els.conversationList.innerHTML = `<div class="sidebar-empty">保存访问密码后显示项目和对话。</div>`;
   els.agents.innerHTML = `<div class="empty">保存访问密码后显示 Win11 状态</div>`;
+  state.activeTasks = [];
+  els.activeSessions.hidden = true;
+  els.activeSessions.innerHTML = "";
+  state.approvalInboxOpen = false;
+  knownPendingApprovalIds = new Set();
+  els.approvalToggle.classList.remove("has-pending");
+  els.approvalToggle.setAttribute("aria-expanded", "false");
+  els.approvalToggle.setAttribute("aria-label", "权限收件箱，暂无待处理");
+  els.approvalCount.hidden = true;
+  els.approvalCount.textContent = "0";
   els.approvalInbox.hidden = true;
   els.approvalInbox.innerHTML = "";
   els.messages.innerHTML = `<div class="empty">保存访问密码后就可以像聊天一样给 Codex 发任务。</div>`;
 }
 
 function ensureSelection() {
-  if (!state.conversations.length && state.activeConversationId) {
+  const activeConversationStillRunning = hasActiveTaskConversation(state.activeConversationId);
+  if (!state.conversations.length && state.activeConversationId && !activeConversationStillRunning) {
     state.activeConversationId = "";
   }
 
@@ -878,7 +1005,7 @@ function ensureSelection() {
   }
 
   const conversations = conversationsForProject(state.activeProjectId);
-  if (!conversations.some((conversation) => conversation.id === state.activeConversationId)) {
+  if (!conversations.some((conversation) => conversation.id === state.activeConversationId) && !activeConversationStillRunning) {
     state.activeConversationId = conversations[0]?.id ?? "";
   }
 
@@ -907,6 +1034,38 @@ function getActiveConversation() {
 
 function conversationsForProject(projectId) {
   return state.conversations.filter((conversation) => conversation.projectId === projectId);
+}
+
+function hasActiveTaskConversation(conversationId) {
+  return Boolean(conversationId) && state.activeTasks.some((task) => task.conversationId === conversationId);
+}
+
+function getActiveTaskForConversation(conversationId) {
+  return state.activeTasks.find((task) => task.conversationId === conversationId);
+}
+
+function isActiveTask(task) {
+  return task && ["queued", "running", "waiting_approval", "cancelling"].includes(task.status);
+}
+
+function compareActiveTasks(left, right) {
+  const priority = {
+    waiting_approval: 0,
+    running: 1,
+    queued: 2,
+    cancelling: 3
+  };
+  const leftPriority = priority[left.status] ?? 9;
+  const rightPriority = priority[right.status] ?? 9;
+  if (leftPriority !== rightPriority) {
+    return leftPriority - rightPriority;
+  }
+  return String(right.updatedAt || right.createdAt || "").localeCompare(String(left.updatedAt || left.createdAt || ""));
+}
+
+function compactText(value, maxLength) {
+  const text = sanitizeDisplayText(value).replace(/\s+/g, " ").trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
 }
 
 function formatRelativeTime(value) {
@@ -951,6 +1110,10 @@ function closeSettings() {
 }
 
 window.openclawHandleAndroidBack = function openclawHandleAndroidBack() {
+  if (state.approvalInboxOpen) {
+    closeApprovalInbox();
+    return true;
+  }
   if (!els.settingsPanel.hidden) {
     closeSettings();
     return true;

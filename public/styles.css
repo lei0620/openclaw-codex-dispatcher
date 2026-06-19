@@ -191,7 +191,10 @@ p {
 .settings-mark::after,
 .sync-mark,
 .sync-mark::before,
-.sync-mark::after {
+.sync-mark::after,
+.approval-mark,
+.approval-mark::before,
+.approval-mark::after {
   display: block;
   border-radius: 999px;
   content: "";
@@ -256,6 +259,73 @@ p {
 
 .sync-open.syncing .sync-mark {
   animation: spinSync 700ms linear infinite;
+}
+
+.approval-open {
+  position: relative;
+}
+
+.approval-open.has-pending {
+  color: #8a5a00;
+  border-color: #efd38b;
+  background: #fff8e6;
+}
+
+.approval-open.has-pending::after {
+  position: absolute;
+  inset: -3px;
+  border: 2px solid rgba(217, 139, 0, 0.28);
+  border-radius: 10px;
+  content: "";
+  animation: approvalPulse 1.8s ease-in-out infinite;
+}
+
+.approval-mark {
+  width: 19px;
+  height: 22px;
+  border: 2px solid currentColor;
+  border-radius: 10px 10px 7px 7px;
+  position: relative;
+}
+
+.approval-mark::before {
+  position: absolute;
+  left: 4px;
+  top: -8px;
+  width: 7px;
+  height: 8px;
+  border: 2px solid currentColor;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: var(--surface);
+}
+
+.approval-mark::after {
+  position: absolute;
+  left: 6px;
+  top: 7px;
+  width: 4px;
+  height: 4px;
+  background: currentColor;
+  box-shadow: 0 4px 0 currentColor;
+}
+
+.approval-count {
+  position: absolute;
+  right: -5px;
+  top: -6px;
+  z-index: 1;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  border: 2px solid var(--surface);
+  border-radius: 999px;
+  background: #d98b00;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 15px;
+  text-align: center;
 }
 
 .new-conversation {
@@ -683,16 +753,37 @@ textarea {
   min-height: 0;
   max-width: 100%;
   display: grid;
-  grid-template-rows: auto minmax(260px, 1fr) auto;
+  grid-template-rows: minmax(260px, 1fr) auto;
   overflow: hidden;
 }
 
 .approval-inbox:not([hidden]) {
   display: grid;
   gap: 10px;
-  border-bottom: 1px solid var(--line);
+  border: 1px solid #efd38b;
+  border-radius: 8px;
   background: #fff8e6;
   padding: 12px 14px;
+  box-shadow: var(--shadow);
+}
+
+.approval-inbox-header,
+.approval-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.approval-inbox-header strong {
+  color: #7a4b00;
+}
+
+.approval-inbox-header span,
+.approval-card-title span,
+.approval-empty {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .approval-card {
@@ -723,6 +814,96 @@ textarea {
   gap: 10px;
   align-items: center;
   justify-content: flex-end;
+}
+
+.active-sessions:not([hidden]) {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 96%, #eef5ff);
+  padding: 10px 12px;
+  box-shadow: var(--shadow);
+}
+
+.active-sessions-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.active-sessions-title strong {
+  color: var(--ink);
+}
+
+.active-session-list {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.active-session-card {
+  flex: 0 0 min(260px, 78vw);
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 5px 8px;
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.active-session-card.active {
+  border-color: rgba(23, 105, 232, 0.45);
+  background: rgba(23, 105, 232, 0.08);
+}
+
+.active-session-status {
+  align-self: center;
+  border-radius: 999px;
+  background: rgba(23, 105, 232, 0.12);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 5px 7px;
+}
+
+.active-session-status.waiting_approval {
+  background: #fff1c2;
+  color: #8a5a00;
+}
+
+.active-session-status.cancelling {
+  background: #ffe1dc;
+  color: #b73522;
+}
+
+.active-session-main,
+.active-session-project {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.active-session-main {
+  font-weight: 700;
+}
+
+.active-session-project {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .messages {
@@ -986,7 +1167,7 @@ textarea {
   }
 
   .chat-panel {
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
     height: 100%;
     min-height: 0;
   }
@@ -1077,5 +1258,17 @@ textarea {
 @keyframes spinSync {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes approvalPulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.08);
   }
 }

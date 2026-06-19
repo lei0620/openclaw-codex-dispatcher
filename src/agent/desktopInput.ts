@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { DesktopInputConfig, ProjectConfig, TaskLogStream, TaskRecord, TaskResult } from "../shared/types.js";
+import { stripInternalMarkup } from "../shared/textSanitizer.js";
 
 interface SessionReply {
   sessionId?: string;
@@ -231,7 +232,7 @@ function extractAssistantText(item: Record<string, unknown>): string {
   if (item.type === "event_msg") {
     const payload = item.payload as { type?: unknown; message?: unknown; phase?: unknown } | undefined;
     if (payload?.type === "agent_message" && typeof payload.message === "string") {
-      return payload.message.trim();
+      return stripInternalMarkup(payload.message);
     }
   }
   if (item.type !== "response_item") {
@@ -241,7 +242,7 @@ function extractAssistantText(item: Record<string, unknown>): string {
   if (payload?.type !== "message" || payload.role !== "assistant") {
     return "";
   }
-  return extractContentText(payload.content, ["output_text", "text"]).trim();
+  return stripInternalMarkup(extractContentText(payload.content, ["output_text", "text"]));
 }
 
 function extractContentText(content: unknown, acceptedTypes: string[]): string {
