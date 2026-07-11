@@ -6,12 +6,13 @@ import { createLifecycleRecovery } from "/lifecycleRecovery.js";
 import { buildDiagnosticsSnapshot, formatSanitizedDiagnostics } from "/diagnostics.js";
 import { createConnectionSettingsStore } from "/connectionSettings.js";
 import { buildApiBaseCandidates, isFailoverSafeRequest } from "/apiBaseFailover.js";
+import { createRealtimeRenderScheduler } from "/realtimeRenderScheduler.js";
 
 const lanApiBase = "http://192.168.101.8:1314";
 const vpnApiBase = "http://100.69.253.5:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.9.4";
-const releaseNotes = "新增局域网与 Tailscale/VPN 自动切换：在家优先连接 NAS 内网地址，外网自动回退到原 VPN 地址，后台提醒也会自动重连。";
+const appVersion = "1.9.6";
+const releaseNotes = "修复重复会话同步造成的消息延迟和界面抖动，合并流式输出刷新；检查更新遇到网络缓慢时会更快给出明确提示。";
 let token = defaultDispatcherToken;
 let apiBase = defaultApiBase();
 
@@ -146,6 +147,8 @@ const els = {
   exportDiagnostics: document.querySelector("#export-diagnostics"),
   diagnosticsStatus: document.querySelector("#diagnostics-status")
 };
+
+const realtimeLogRender = createRealtimeRenderScheduler(renderMessages, { delayMs: 80 });
 
 function getLatestConversation() {
   return state.conversations[0];
@@ -747,6 +750,13 @@ async function handleRealtimeEvent(event) {
   if (userIsReadingHistory) {
     markActiveConversationUnread();
   }
+  if (event.type === "task.log") {
+    if (affectsActiveConversation) {
+      realtimeLogRender.schedule();
+    }
+    return;
+  }
+  realtimeLogRender.cancel();
   renderConnectionFromRealtimeState();
   renderAll();
 }

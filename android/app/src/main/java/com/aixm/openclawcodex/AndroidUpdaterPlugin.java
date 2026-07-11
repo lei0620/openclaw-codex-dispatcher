@@ -25,6 +25,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.net.HttpURLConnection;
+import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
@@ -40,6 +41,10 @@ import javax.crypto.spec.GCMParameterSpec;
 @CapacitorPlugin(name = "AndroidUpdater")
 public class AndroidUpdaterPlugin extends Plugin {
     private static final String APK_MIME_TYPE = "application/vnd.android.package-archive";
+    private static final int MANIFEST_CONNECT_TIMEOUT_MS = 8000;
+    private static final int MANIFEST_READ_TIMEOUT_MS = 12000;
+    private static final int APK_CONNECT_TIMEOUT_MS = 15000;
+    private static final int APK_READ_TIMEOUT_MS = 60000;
 
     @PluginMethod
     public void check(PluginCall call) {
@@ -110,6 +115,8 @@ public class AndroidUpdaterPlugin extends Plugin {
         new Thread(() -> {
             try {
                 runnable.run();
+            } catch (SocketTimeoutException error) {
+                call.reject("连接更新服务器超时，请检查网络后重试。");
             } catch (Exception error) {
                 call.reject(error.getMessage() == null ? error.toString() : error.getMessage());
             }
@@ -143,7 +150,12 @@ public class AndroidUpdaterPlugin extends Plugin {
     }
 
     private String httpGetText(String url, Credentials credentials) throws Exception {
-        HttpURLConnection connection = openConnection(url, credentials);
+        HttpURLConnection connection = openConnection(
+                url,
+                credentials,
+                MANIFEST_CONNECT_TIMEOUT_MS,
+                MANIFEST_READ_TIMEOUT_MS
+        );
         try {
             int status = connection.getResponseCode();
             if (status < 200 || status >= 300) {
@@ -164,7 +176,12 @@ public class AndroidUpdaterPlugin extends Plugin {
     }
 
     private void httpDownload(String url, Credentials credentials, File outputFile) throws Exception {
-        HttpURLConnection connection = openConnection(url, credentials);
+        HttpURLConnection connection = openConnection(
+                url,
+                credentials,
+                APK_CONNECT_TIMEOUT_MS,
+                APK_READ_TIMEOUT_MS
+        );
         try {
             int status = connection.getResponseCode();
             if (status < 200 || status >= 300) {
@@ -183,10 +200,15 @@ public class AndroidUpdaterPlugin extends Plugin {
         }
     }
 
-    private HttpURLConnection openConnection(String url, Credentials credentials) throws Exception {
+    private HttpURLConnection openConnection(
+            String url,
+            Credentials credentials,
+            int connectTimeoutMs,
+            int readTimeoutMs
+    ) throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
-        connection.setConnectTimeout(15000);
-        connection.setReadTimeout(60000);
+        connection.setConnectTimeout(connectTimeoutMs);
+        connection.setReadTimeout(readTimeoutMs);
         connection.setRequestProperty("Authorization", basicAuth(credentials.username, credentials.password));
         connection.setRequestProperty("Accept", "application/json, application/vnd.android.package-archive, */*");
         return connection;

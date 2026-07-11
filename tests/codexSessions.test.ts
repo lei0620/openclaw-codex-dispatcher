@@ -145,7 +145,69 @@ describe("selectRecentConversationMessages", () => {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  it("merges multiple rollout files that belong to the same Codex session", () => {
+    const previousCodexHome = process.env.CODEX_HOME;
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-home-"));
+    try {
+      process.env.CODEX_HOME = tmp;
+      const projectPath = path.join(tmp, "project");
+      const sessionsDir = path.join(tmp, "sessions", "2026", "07", "11");
+      fs.mkdirSync(projectPath, { recursive: true });
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      const sessionId = "019f5a2e-8ef8-7e70-9508-b642b03da102";
+      writeSessionFile(path.join(sessionsDir, `rollout-a-${sessionId}.jsonl`), sessionId, projectPath, [
+        { role: "user", text: "第一条", at: "2026-07-11T08:00:00.000Z" },
+        { role: "assistant", text: "回答一", at: "2026-07-11T08:00:10.000Z" }
+      ]);
+      writeSessionFile(path.join(sessionsDir, `rollout-b-${sessionId}.jsonl`), sessionId, projectPath, [
+        { role: "user", text: "第二条", at: "2026-07-11T08:01:00.000Z" },
+        { role: "assistant", text: "回答二", at: "2026-07-11T08:01:10.000Z" }
+      ]);
+      const projects: ProjectConfig[] = [{
+        id: "demo",
+        name: "Demo",
+        path: projectPath,
+        defaultMode: "codex",
+        allowedModes: ["codex"],
+        notify: true
+      }];
+
+      const conversations = readRecentCodexConversations(projects);
+
+      expect(conversations).toHaveLength(1);
+      expect(conversations[0]).toMatchObject({
+        sessionId,
+        messages: [
+          { role: "user", text: "第一条" },
+          { role: "assistant", text: "回答一" },
+          { role: "user", text: "第二条" },
+          { role: "assistant", text: "回答二" }
+        ]
+      });
+    } finally {
+      restoreEnv("CODEX_HOME", previousCodexHome);
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });
+
+function writeSessionFile(
+  filePath: string,
+  sessionId: string,
+  cwd: string,
+  messages: ConversationMessage[]
+): void {
+  const lines: unknown[] = [{ type: "session_meta", payload: { id: sessionId, cwd, timestamp: messages[0]?.at } }];
+  for (const message of messages) {
+    lines.push({
+      type: "response_item",
+      timestamp: message.at,
+      payload: { type: "message", role: message.role, content: [{ text: message.text }] }
+    });
+  }
+  fs.writeFileSync(filePath, lines.map((line) => JSON.stringify(line)).join("\n"), "utf8");
+}
 
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) {

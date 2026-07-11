@@ -131,6 +131,14 @@ describe("mobile panel copy", () => {
     expect(js).not.toContain('setInterval(() => refresh(), 2000)');
   });
 
+  it("batches streamed logs without delaying important realtime state changes", () => {
+    const js = fs.readFileSync("public/app.js", "utf8");
+
+    expect(js).toContain("realtimeLogRender.schedule()");
+    expect(js).toContain("realtimeLogRender.cancel()");
+    expect(js).toContain('if (event.type === "task.log")');
+  });
+
   it("recovers after foreground resume without resending a task", () => {
     const js = fs.readFileSync("public/app.js", "utf8");
 

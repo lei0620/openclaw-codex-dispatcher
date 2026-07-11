@@ -36,10 +36,20 @@ export function readRecentCodexConversations(projects: ProjectConfig[]): SyncedC
     .sort((a, b) => b.mtimeMs - a.mtimeMs)
     .slice(0, maxSessionFiles);
 
-  const perProject = new Map<string, SyncedCodexConversation[]>();
+  const sessionsById = new Map<string, ParsedSession>();
   for (const file of files) {
     const parsed = parseSessionFile(file.fullPath, index);
     if (!parsed?.cwd) {
+      continue;
+    }
+    const existing = sessionsById.get(parsed.sessionId);
+    sessionsById.set(parsed.sessionId, existing ? mergeParsedSessions(existing, parsed) : parsed);
+  }
+
+  const perProject = new Map<string, SyncedCodexConversation[]>();
+  const sessions = [...sessionsById.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  for (const parsed of sessions) {
+    if (!parsed.cwd) {
       continue;
     }
     const project = findProjectForCwd(parsed.cwd, projects);
@@ -63,6 +73,30 @@ export function readRecentCodexConversations(projects: ProjectConfig[]): SyncedC
   return [...perProject.values()]
     .flat()
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+function mergeParsedSessions(existing: ParsedSession, incoming: ParsedSession): ParsedSession {
+  return {
+    sessionId: existing.sessionId,
+    cwd: existing.cwd || incoming.cwd,
+    title: existing.title || incoming.title,
+    updatedAt: existing.updatedAt.localeCompare(incoming.updatedAt) >= 0 ? existing.updatedAt : incoming.updatedAt,
+    messages: selectRecentConversationMessages(mergeConversationMessages(existing.messages, incoming.messages))
+  };
+}
+
+function mergeConversationMessages(current: ConversationMessage[], incoming: ConversationMessage[]): ConversationMessage[] {
+  const messages: ConversationMessage[] = [];
+  const keys = new Set<string>();
+  for (const message of [...current, ...incoming].sort(compareConversationMessages)) {
+    const key = `${message.role}\u0000${message.at}\u0000${message.text}`;
+    if (keys.has(key)) {
+      continue;
+    }
+    keys.add(key);
+    messages.push(message);
+  }
+  return messages;
 }
 
 function readSessionIndex(indexPath: string): Map<string, IndexedSession> {

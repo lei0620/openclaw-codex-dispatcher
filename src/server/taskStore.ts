@@ -8,6 +8,7 @@ import type {
   ApprovalStatus,
   CodexDesktopWindow,
   CodexServiceStatus,
+  ConversationMessage,
   ConversationRecord,
   CreateTaskInput,
   MobileEvent,
@@ -53,6 +54,9 @@ export class TaskStore extends EventEmitter {
     this.mobileEventStoragePath = storagePath ? `${storagePath}.events.jsonl` : undefined;
     this.mobileEventLimit = Math.max(1, options.mobileEventLimit ?? 500);
     this.load();
+    if (this.deduplicateStoredCodexConversations()) {
+      this.save();
+    }
     this.loadMobileEvents();
     for (const taskId of this.recoveredTaskIds) {
       const task = this.tasks.get(taskId);
@@ -98,7 +102,7 @@ export class TaskStore extends EventEmitter {
   upsertCodexConversations(input: SyncedCodexConversation[]): ConversationRecord[] {
     const records: ConversationRecord[] = [];
     const changedRecords: ConversationRecord[] = [];
-    for (const item of input) {
+    for (const item of coalesceSyncedConversations(input)) {
       const existingBySession = [...this.conversations.values()].find((conversation) => conversation.codexSessionId === item.sessionId);
       const id = existingBySession?.id ?? codexConversationId(item.sessionId);
       const existing = this.conversations.get(id);
@@ -124,7 +128,7 @@ export class TaskStore extends EventEmitter {
         changedRecords.push(structuredClone(record));
       }
     }
-    if (records.length > 0) {
+    if (changedRecords.length > 0) {
       this.save();
     }
     this.emit("codex.synced");
@@ -816,6 +820,64 @@ export class TaskStore extends EventEmitter {
     fs.writeFileSync(this.mobileEventStoragePath, content ? `${content}\n` : "", "utf8");
   }
 
+  private deduplicateStoredCodexConversations(): boolean {
+    const bySession = new Map<string, ConversationRecord[]>();
+    for (const conversation of this.conversations.values()) {
+      const sessionId = conversation.codexSessionId;
+      if (!sessionId) {
+        continue;
+      }
+      const group = bySession.get(sessionId) ?? [];
+      group.push(conversation);
+      bySession.set(sessionId, group);
+    }
+
+    let changed = false;
+    for (const [sessionId, group] of bySession) {
+      if (group.length < 2) {
+        continue;
+      }
+      const taskCount = (conversationId: string) => this.listTasks(conversationId).length;
+      const primary = [...group].sort((left, right) => {
+        const taskDifference = taskCount(right.id) - taskCount(left.id);
+        if (taskDifference !== 0) return taskDifference;
+        const bindingDifference = Number(Boolean(right.refreshWindowId)) - Number(Boolean(left.refreshWindowId));
+        if (bindingDifference !== 0) return bindingDifference;
+        const leftCanonical = left.id === codexConversationId(sessionId);
+        const rightCanonical = right.id === codexConversationId(sessionId);
+        if (leftCanonical !== rightCanonical) return leftCanonical ? 1 : -1;
+        return right.updatedAt.localeCompare(left.updatedAt);
+      })[0];
+      const latest = [...group].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+      const messages = group.reduce(
+        (current, conversation) => mergeSyncedConversationMessages(current, conversation.messages ?? []),
+        [] as ConversationMessage[]
+      );
+      const merged: ConversationRecord = {
+        ...primary,
+        title: latest.title,
+        createdAt: [...group].sort((left, right) => left.createdAt.localeCompare(right.createdAt))[0].createdAt,
+        updatedAt: latest.updatedAt,
+        refreshWindowId: primary.refreshWindowId ?? group.find((conversation) => conversation.refreshWindowId)?.refreshWindowId,
+        messages
+      };
+      const duplicateIds = new Set(group.filter((conversation) => conversation.id !== primary.id).map((conversation) => conversation.id));
+      for (const task of this.tasks.values()) {
+        if (task.conversationId && duplicateIds.has(task.conversationId)) {
+          task.conversationId = primary.id;
+        }
+      }
+      for (const duplicateId of duplicateIds) {
+        this.conversations.delete(duplicateId);
+      }
+      this.conversations.set(primary.id, merged);
+      const nextOrder = this.conversationOrder.filter((id) => !duplicateIds.has(id));
+      this.conversationOrder.splice(0, this.conversationOrder.length, ...nextOrder);
+      changed = true;
+    }
+    return changed;
+  }
+
   private save(): void {
     if (!this.storagePath) {
       return;
@@ -835,6 +897,49 @@ export class TaskStore extends EventEmitter {
       "utf8"
     );
   }
+}
+
+function coalesceSyncedConversations(input: SyncedCodexConversation[]): SyncedCodexConversation[] {
+  const conversations = new Map<string, SyncedCodexConversation>();
+  for (const item of input) {
+    const key = `${item.projectId}\u0000${item.sessionId}`;
+    const existing = conversations.get(key);
+    if (!existing) {
+      conversations.set(key, structuredClone(item));
+      continue;
+    }
+    const incomingIsNewer = item.updatedAt.localeCompare(existing.updatedAt) >= 0;
+    conversations.set(key, {
+      projectId: item.projectId,
+      sessionId: item.sessionId,
+      title: incomingIsNewer ? item.title : existing.title,
+      updatedAt: incomingIsNewer ? item.updatedAt : existing.updatedAt,
+      messages: mergeSyncedConversationMessages(existing.messages, item.messages)
+    });
+  }
+  return [...conversations.values()];
+}
+
+function mergeSyncedConversationMessages(
+  current: ConversationMessage[],
+  incoming: ConversationMessage[]
+): ConversationMessage[] {
+  const messages: ConversationMessage[] = [];
+  const keys = new Set<string>();
+  const ordered = [...current, ...incoming].sort((left, right) => {
+    const leftTime = Date.parse(left.at || "");
+    const rightTime = Date.parse(right.at || "");
+    return Number.isFinite(leftTime) && Number.isFinite(rightTime) ? leftTime - rightTime : 0;
+  });
+  for (const message of ordered) {
+    const key = `${message.role}\u0000${message.at}\u0000${message.text}`;
+    if (keys.has(key)) {
+      continue;
+    }
+    keys.add(key);
+    messages.push(message);
+  }
+  return messages.slice(-18);
 }
 
 function normalizeTitle(title: string | undefined): string {

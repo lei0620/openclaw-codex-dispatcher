@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TaskStore } from "../src/server/taskStore.js";
 
 const tempDirs: string[] = [];
@@ -99,6 +99,125 @@ describe("TaskStore mobile reliability", () => {
     expect(window.resetRequired).toBe(true);
     expect(window.events).toEqual([]);
     expect(window.latestEventId).toBeGreaterThan(1);
+  });
+
+  it("coalesces duplicate Codex session rows and does not rebroadcast an unchanged sync", () => {
+    const store = new TaskStore();
+    const input = [
+      {
+        projectId: "openclaw",
+        sessionId: "session-duplicate",
+        title: "同一个对话",
+        updatedAt: "2026-07-11T08:00:00.000Z",
+        messages: [{ role: "user" as const, text: "第一条", at: "2026-07-11T08:00:00.000Z" }]
+      },
+      {
+        projectId: "openclaw",
+        sessionId: "session-duplicate",
+        title: "同一个对话",
+        updatedAt: "2026-07-11T08:01:00.000Z",
+        messages: [
+          { role: "user" as const, text: "第一条", at: "2026-07-11T08:00:00.000Z" },
+          { role: "assistant" as const, text: "回答一", at: "2026-07-11T08:00:10.000Z" }
+        ]
+      }
+    ];
+    const cursor = store.getLatestMobileEventId();
+
+    store.upsertCodexConversations(input);
+
+    const firstWindow = store.getMobileEventWindow(cursor);
+    expect(firstWindow.events).toHaveLength(1);
+    expect(firstWindow.events[0]).toMatchObject({ type: "conversation.updated" });
+    expect(store.listConversations()).toMatchObject([{
+      codexSessionId: "session-duplicate",
+      messages: [
+        { role: "user", text: "第一条" },
+        { role: "assistant", text: "回答一" }
+      ]
+    }]);
+
+    store.upsertCodexConversations(input);
+
+    expect(store.getMobileEventWindow(firstWindow.latestEventId).events).toEqual([]);
+  });
+
+  it("does not rewrite persistent state when a Codex sync is unchanged", () => {
+    const stateFile = createStateFile();
+    const store = new TaskStore(stateFile);
+    const input = [{
+      projectId: "openclaw",
+      sessionId: "session-stable",
+      title: "稳定对话",
+      updatedAt: "2026-07-11T08:00:00.000Z",
+      messages: [{ role: "user" as const, text: "在吗", at: "2026-07-11T08:00:00.000Z" }]
+    }];
+    store.upsertCodexConversations(input);
+    const writeFile = vi.spyOn(fs, "writeFileSync");
+    try {
+      store.upsertCodexConversations(input);
+      expect(writeFile).not.toHaveBeenCalled();
+    } finally {
+      writeFile.mockRestore();
+    }
+  });
+
+  it("migrates duplicate persisted Codex sessions into one conversation without orphaning tasks", () => {
+    const stateFile = createStateFile();
+    fs.writeFileSync(stateFile, JSON.stringify({
+      conversations: [
+        {
+          id: "phone-conversation",
+          projectId: "openclaw",
+          title: "手机对话",
+          createdAt: "2026-07-11T08:00:00.000Z",
+          updatedAt: "2026-07-11T08:02:00.000Z",
+          source: "codex",
+          codexSessionId: "session-shared",
+          refreshWindowId: "window-1",
+          messages: [{ role: "user", text: "手机消息", at: "2026-07-11T08:00:00.000Z" }]
+        },
+        {
+          id: "codex:session-shared",
+          projectId: "openclaw",
+          title: "电脑对话",
+          createdAt: "2026-07-11T08:01:00.000Z",
+          updatedAt: "2026-07-11T08:03:00.000Z",
+          source: "codex",
+          codexSessionId: "session-shared",
+          messages: [{ role: "assistant", text: "电脑回复", at: "2026-07-11T08:01:00.000Z" }]
+        }
+      ],
+      tasks: [{
+        id: "task-1",
+        projectId: "openclaw",
+        conversationId: "phone-conversation",
+        codexSessionId: "session-shared",
+        prompt: "手机消息",
+        mode: "codex",
+        source: "panel",
+        status: "completed",
+        createdAt: "2026-07-11T08:00:00.000Z",
+        updatedAt: "2026-07-11T08:02:00.000Z",
+        logs: []
+      }],
+      windowRemarks: {}
+    }), "utf8");
+
+    const store = new TaskStore(stateFile);
+
+    expect(store.listConversations()).toMatchObject([{
+      id: "phone-conversation",
+      title: "电脑对话",
+      refreshWindowId: "window-1",
+      messages: [
+        { role: "user", text: "手机消息" },
+        { role: "assistant", text: "电脑回复" }
+      ]
+    }]);
+    expect(store.listTasks()).toMatchObject([{ conversationId: "phone-conversation" }]);
+    const persisted = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    expect(persisted.conversations).toHaveLength(1);
   });
 
   it("publishes logs, task completion, and approval lifecycle events", () => {

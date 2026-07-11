@@ -75,4 +75,10 @@ describe("static panel assets", () => {
 
     expect(response.headers["cache-control"]).toBe("no-store");
   });
+
+  it("prevents stale caches for realtime render scheduling", async () => {
+    const response = await request(createApp(config, new TaskStore())).get("/realtimeRenderScheduler.js").expect(200);
+
+    expect(response.headers["cache-control"]).toBe("no-store");
+  });
 });
