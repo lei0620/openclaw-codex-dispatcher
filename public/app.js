@@ -4,13 +4,20 @@ import { createRealtimeClient } from "/realtimeClient.js";
 import { applyMobileEvent } from "/realtimeState.js";
 import { createLifecycleRecovery } from "/lifecycleRecovery.js";
 import { buildDiagnosticsSnapshot, formatSanitizedDiagnostics } from "/diagnostics.js";
+import { createConnectionSettingsStore } from "/connectionSettings.js";
 
 const lanApiBase = "http://192.168.101.8:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.7.0";
-const releaseNotes = "切回 App 自动恢复实时连接；阅读历史时不再被新消息拉到底部；新增会话状态标记、回到最新按钮和一键脱敏诊断。";
-let token = localStorage.getItem("openclawToken") || defaultDispatcherToken;
-let apiBase = getStoredApiBase();
+const appVersion = "1.8.0";
+const releaseNotes = "NAS 服务地址和访问密码改用 Android Keystore 加密保存；升级后自动迁移旧设置，无需重新输入。";
+let token = defaultDispatcherToken;
+let apiBase = defaultApiBase();
+
+const connectionSettings = createConnectionSettingsStore({
+  nativeStore: getSecureConnectionPlugin(),
+  localStorage,
+  defaultApiBase
+});
 
 const selectionKeys = {
   project: "openclawActiveProject",
@@ -147,6 +154,7 @@ function setAutoFollow(enabled) {
   persistSelection();
 }
 
+await loadConnectionSettings();
 els.autoFollowConversation.checked = state.autoFollowConversation;
 els.token.value = token;
 els.apiBase.value = apiBase;
@@ -214,6 +222,10 @@ function getDispatcherHttp() {
   return window.Capacitor?.Plugins?.DispatcherHttp;
 }
 
+function getSecureConnectionPlugin() {
+  return window.Capacitor?.Plugins?.SecureConnection;
+}
+
 function defaultApiBase() {
   const localHosts = new Set(["", "localhost", "127.0.0.1"]);
   if (location.protocol === "capacitor:" || localHosts.has(location.hostname)) {
@@ -222,13 +234,20 @@ function defaultApiBase() {
   return "";
 }
 
-function getStoredApiBase() {
-  const stored = normalizeApiBase(localStorage.getItem("openclawApiBase") || "");
-  if (!stored || isOldDefaultApiBase(stored)) {
-    localStorage.setItem("openclawApiBase", defaultApiBase());
-    return defaultApiBase();
+async function loadConnectionSettings() {
+  try {
+    const loaded = await connectionSettings.load();
+    token = loaded.token || defaultDispatcherToken;
+    apiBase = normalizeApiBase(loaded.apiBase);
+    if (!apiBase || isOldDefaultApiBase(apiBase)) {
+      apiBase = defaultApiBase();
+      await connectionSettings.save({ token, apiBase });
+    }
+  } catch (error) {
+    token = defaultDispatcherToken;
+    apiBase = defaultApiBase();
+    state.latestError = `安全设置读取失败：${error?.message || error}`;
   }
-  return stored;
 }
 
 function isOldDefaultApiBase(value) {
@@ -399,35 +418,40 @@ function toggleConnectionDetails() {
   els.statusIcon.setAttribute("aria-expanded", String(willOpen));
 }
 
-function saveToken() {
+async function saveToken() {
   token = els.token.value.trim();
-  localStorage.setItem("openclawToken", token);
-  refresh().finally(() => realtime?.restart());
+  await saveConnectionSettingsAndReconnect();
 }
 
-function saveApiBase() {
+async function saveApiBase() {
   apiBase = normalizeApiBase(els.apiBase.value);
   els.apiBase.value = apiBase;
-  if (apiBase) {
-    localStorage.setItem("openclawApiBase", apiBase);
-  } else {
-    localStorage.removeItem("openclawApiBase");
-  }
-  refresh().finally(() => realtime?.restart());
+  await saveConnectionSettingsAndReconnect();
 }
 
-function resetApiBase() {
+async function resetApiBase() {
   apiBase = lanApiBase;
   els.apiBase.value = apiBase;
-  localStorage.setItem("openclawApiBase", apiBase);
-  refresh().finally(() => realtime?.restart());
+  await saveConnectionSettingsAndReconnect();
 }
 
-function resetToken() {
+async function resetToken() {
   token = defaultDispatcherToken;
   els.token.value = token;
-  localStorage.setItem("openclawToken", token);
-  refresh().finally(() => realtime?.restart());
+  await saveConnectionSettingsAndReconnect();
+}
+
+async function saveConnectionSettingsAndReconnect() {
+  try {
+    await connectionSettings.save({ token, apiBase });
+    state.latestError = "";
+    await refresh();
+    realtime?.restart();
+  } catch (error) {
+    state.latestError = `安全设置保存失败：${error?.message || error}`;
+    els.status.textContent = "保存失败，请查看连接诊断";
+    renderDiagnostics();
+  }
 }
 
 async function submitTask(event) {

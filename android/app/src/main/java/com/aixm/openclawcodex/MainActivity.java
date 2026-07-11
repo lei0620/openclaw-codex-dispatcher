@@ -11,6 +11,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(AndroidUpdaterPlugin.class);
         registerPlugin(DispatcherHttpPlugin.class);
+        registerPlugin(SecureConnectionPlugin.class);
         super.onCreate(savedInstanceState);
         installBackGestureGuard();
     }

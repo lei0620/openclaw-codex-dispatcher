@@ -163,4 +163,16 @@ describe("mobile panel copy", () => {
     expect(css).toContain('.conversation-status-marker');
     expect(css).toContain('.diagnostics-grid');
   });
+
+  it("loads Android connection credentials from Keystore before the first refresh", () => {
+    const js = fs.readFileSync("public/app.js", "utf8");
+
+    expect(js).toContain('createConnectionSettingsStore');
+    expect(js).toContain('await connectionSettings.load()');
+    expect(js).toContain('await connectionSettings.save({ token, apiBase })');
+    expect(js).not.toContain('localStorage.getItem("openclawToken")');
+    expect(js).not.toContain('localStorage.setItem("openclawToken"');
+    expect(js).not.toContain('localStorage.getItem("openclawApiBase")');
+    expect(js).not.toContain('localStorage.setItem("openclawApiBase"');
+  });
 });
