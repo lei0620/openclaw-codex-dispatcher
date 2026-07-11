@@ -1,10 +1,12 @@
 import { createRefreshGate } from "/refreshGate.js";
 import { deriveConnectionStatus } from "/connectionStatus.js";
+import { createRealtimeClient } from "/realtimeClient.js";
+import { applyMobileEvent } from "/realtimeState.js";
 
 const lanApiBase = "http://192.168.101.8:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.5.0";
-const releaseNotes = "新增 NAS、电脑、Codex 三层连接状态；适配新版 Codex 桌面客户端；预热会话服务，并防止手机消息误发到其他对话。";
+const appVersion = "1.6.0";
+const releaseNotes = "消息通过 NAS 实时同步；断线后自动补发缺失事件；发送失败可原消息重试且不会重复执行；同窗口串行、不同会话可并行。";
 let token = localStorage.getItem("openclawToken") || defaultDispatcherToken;
 let apiBase = getStoredApiBase();
 
@@ -12,8 +14,13 @@ const selectionKeys = {
   project: "openclawActiveProject",
   conversation: "openclawActiveConversation",
   autoFollowConversation: "openclawAutoFollowConversation",
-  windowAliases: "openclawWindowAliases"
+  windowAliases: "openclawWindowAliases",
+  realtimeCursor: "openclawRealtimeCursor",
+  realtimeClient: "openclawRealtimeClient",
+  pendingSends: "openclawPendingSends"
 };
+
+const realtimeClientId = getOrCreateRealtimeClientId();
 
 const state = {
   projects: [],
@@ -23,6 +30,7 @@ const state = {
   approvals: [],
   agents: [],
   codexWindows: [],
+  pendingSends: loadPendingSends(),
   activeProjectId: localStorage.getItem(selectionKeys.project) || "",
   activeConversationId: localStorage.getItem(selectionKeys.conversation) || "",
   autoFollowConversation: localStorage.getItem(selectionKeys.autoFollowConversation) !== "0",
@@ -37,6 +45,7 @@ const scrollState = {
 };
 
 let knownPendingApprovalIds = new Set();
+let realtime;
 const refresh = createRefreshGate(refreshNow);
 
 const modeLabels = {
@@ -51,7 +60,9 @@ const statusLabels = {
   cancelling: "正在取消",
   cancelled: "已取消",
   completed: "已完成",
-  failed: "失败"
+  failed: "失败",
+  sending: "正在发送",
+  send_failed: "发送失败"
 };
 
 const noisyLogPatterns = [
@@ -157,7 +168,18 @@ els.settingsScrim.addEventListener("click", closeSettings);
 initAndroidUpdateControls();
 renderAppVersion();
 await refresh();
-setInterval(() => refresh(), 2000);
+realtime = createRealtimeClient({
+  clientId: realtimeClientId,
+  getApiBase: () => apiBase,
+  getToken: () => token,
+  getLastEventId: getRealtimeCursor,
+  setLastEventId: setRealtimeCursor,
+  onEvent: handleRealtimeEvent,
+  onSyncRequired: reconcileRealtimeState,
+  onState: renderRealtimeConnectionState
+});
+realtime.start();
+setInterval(() => refresh(), 30000);
 
 function getAndroidUpdater() {
   return window.Capacitor?.Plugins?.AndroidUpdater;
@@ -347,7 +369,7 @@ function toggleConnectionDetails() {
 function saveToken() {
   token = els.token.value.trim();
   localStorage.setItem("openclawToken", token);
-  refresh();
+  refresh().finally(() => realtime?.restart());
 }
 
 function saveApiBase() {
@@ -358,21 +380,21 @@ function saveApiBase() {
   } else {
     localStorage.removeItem("openclawApiBase");
   }
-  refresh();
+  refresh().finally(() => realtime?.restart());
 }
 
 function resetApiBase() {
   apiBase = lanApiBase;
   els.apiBase.value = apiBase;
   localStorage.setItem("openclawApiBase", apiBase);
-  refresh();
+  refresh().finally(() => realtime?.restart());
 }
 
 function resetToken() {
   token = defaultDispatcherToken;
   els.token.value = token;
   localStorage.setItem("openclawToken", token);
-  refresh();
+  refresh().finally(() => realtime?.restart());
 }
 
 async function submitTask(event) {
@@ -383,34 +405,222 @@ async function submitTask(event) {
     return;
   }
 
+  const pending = createPendingSend({
+    projectId: project.id,
+    conversationId: state.activeConversationId,
+    mode: els.mode.value,
+    prompt
+  });
+  state.pendingSends[pending.clientMessageId] = pending;
+  persistPendingSends();
+  addOptimisticTask(pending);
+  els.prompt.value = "";
+  requestMessageScrollToBottom();
+  renderAll();
+
   els.submit.disabled = true;
-  els.submit.textContent = "发送中";
   setSubmitError("");
 
   try {
-    const payload = await api("/api/tasks", {
-      method: "POST",
-      body: JSON.stringify({
-        projectId: project.id,
-        conversationId: state.activeConversationId || undefined,
-        mode: els.mode.value,
-        prompt,
-        source: "panel"
-      })
-    });
-    if (payload.task?.conversationId) {
-      state.activeConversationId = payload.task.conversationId;
-      persistSelection();
-    }
-    els.prompt.value = "";
-    requestMessageScrollToBottom();
-    await refresh();
+    await sendPendingRecord(pending);
   } catch (error) {
+    markPendingSendFailed(pending.clientMessageId, error);
     setSubmitError(friendlySubmitError(error));
   } finally {
     els.submit.disabled = false;
-    els.submit.textContent = "发送";
   }
+}
+
+async function retryPendingSend(clientMessageId) {
+  const pending = state.pendingSends[clientMessageId];
+  if (!pending) {
+    return;
+  }
+  markPendingSendSending(clientMessageId);
+  setSubmitError("");
+  try {
+    await sendPendingRecord(pending);
+  } catch (error) {
+    markPendingSendFailed(clientMessageId, error);
+    setSubmitError(friendlySubmitError(error));
+  }
+}
+
+async function sendPendingRecord(pending) {
+  const payload = await api("/api/tasks", {
+    method: "POST",
+    body: JSON.stringify({
+      clientMessageId: pending.clientMessageId,
+      projectId: pending.projectId,
+      conversationId: pending.conversationId || undefined,
+      mode: pending.mode,
+      prompt: pending.prompt,
+      source: "panel"
+    })
+  });
+  if (!payload.task) {
+    throw new Error("NAS 没有返回任务，请重试。");
+  }
+  applyMobileEvent(state, createLocalTaskEvent(payload.task));
+  persistPendingSends();
+  if (payload.task.conversationId) {
+    state.activeConversationId = payload.task.conversationId;
+    persistSelection();
+  }
+  renderAll();
+}
+
+function createPendingSend({ projectId, conversationId, mode, prompt }) {
+  const now = new Date().toISOString();
+  return {
+    clientMessageId: createClientMessageId(),
+    projectId,
+    conversationId,
+    mode,
+    prompt,
+    source: "panel",
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function addOptimisticTask(pending) {
+  const task = pendingToTask(pending, "sending");
+  state.tasks = [...state.tasks.filter((item) => item.clientMessageId !== pending.clientMessageId), task];
+  state.activeTasks = [...state.activeTasks.filter((item) => item.clientMessageId !== pending.clientMessageId), task];
+}
+
+function markPendingSendSending(clientMessageId) {
+  updateOptimisticTask(clientMessageId, { status: "sending", error: undefined, updatedAt: new Date().toISOString() });
+  renderAll();
+}
+
+function markPendingSendFailed(clientMessageId, error) {
+  updateOptimisticTask(clientMessageId, {
+    status: "send_failed",
+    error: friendlySubmitError(error),
+    updatedAt: new Date().toISOString()
+  });
+  state.activeTasks = state.activeTasks.filter((task) => task.clientMessageId !== clientMessageId);
+  renderAll();
+}
+
+function updateOptimisticTask(clientMessageId, changes) {
+  state.tasks = state.tasks.map((task) => task.clientMessageId === clientMessageId ? { ...task, ...changes } : task);
+}
+
+function pendingToTask(pending, status = "sending") {
+  return {
+    id: `local:${pending.clientMessageId}`,
+    clientMessageId: pending.clientMessageId,
+    projectId: pending.projectId,
+    conversationId: pending.conversationId,
+    mode: pending.mode,
+    prompt: pending.prompt,
+    source: pending.source,
+    status,
+    logs: [],
+    createdAt: pending.createdAt,
+    updatedAt: pending.updatedAt
+  };
+}
+
+function mergePendingTasks(tasks, conversationId) {
+  const serverMessageIds = new Set(tasks.map((task) => task.clientMessageId).filter(Boolean));
+  for (const clientMessageId of serverMessageIds) {
+    delete state.pendingSends[clientMessageId];
+  }
+  persistPendingSends();
+  const optimistic = Object.values(state.pendingSends)
+    .filter((pending) => pending.conversationId === conversationId)
+    .filter((pending) => !serverMessageIds.has(pending.clientMessageId))
+    .map((pending) => pendingToTask(pending, "send_failed"));
+  return [...tasks, ...optimistic];
+}
+
+function createLocalTaskEvent(task) {
+  return {
+    eventId: 0,
+    type: "task.created",
+    taskId: task.id,
+    conversationId: task.conversationId,
+    occurredAt: task.updatedAt || new Date().toISOString(),
+    payload: { task }
+  };
+}
+
+function persistPendingSends() {
+  localStorage.setItem(selectionKeys.pendingSends, JSON.stringify(state.pendingSends));
+}
+
+function loadPendingSends() {
+  try {
+    const value = JSON.parse(localStorage.getItem(selectionKeys.pendingSends) || "{}");
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function createClientMessageId() {
+  return `${realtimeClientId}:${createRandomId()}`;
+}
+
+function getOrCreateRealtimeClientId() {
+  const stored = localStorage.getItem(selectionKeys.realtimeClient);
+  if (stored) {
+    return stored;
+  }
+  const created = `phone:${createRandomId()}`;
+  localStorage.setItem(selectionKeys.realtimeClient, created);
+  return created;
+}
+
+function createRandomId() {
+  if (typeof crypto?.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function getRealtimeCursor() {
+  const value = Number(localStorage.getItem(selectionKeys.realtimeCursor));
+  return Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+function setRealtimeCursor(eventId) {
+  if (Number.isInteger(eventId) && eventId >= 0) {
+    localStorage.setItem(selectionKeys.realtimeCursor, String(eventId));
+  }
+}
+
+async function handleRealtimeEvent(event) {
+  applyMobileEvent(state, event);
+  persistPendingSends();
+  renderConnectionFromRealtimeState();
+  renderAll();
+}
+
+async function reconcileRealtimeState({ latestEventId }) {
+  await refresh();
+  return latestEventId;
+}
+
+function renderRealtimeConnectionState(realtimeState) {
+  els.status.dataset.realtime = realtimeState;
+  if (realtimeState === "reconnecting") {
+    els.statusIcon.title = `${els.statusIcon.title || "NAS 已连接"}，实时通道正在重连`;
+  }
+}
+
+function renderConnectionFromRealtimeState() {
+  const onlineAgents = state.agents.filter((agent) => agent.online).length;
+  const readyCodex = state.codexWindows.length > 0 ? 1 : 0;
+  const input = { nasReachable: true, onlineAgents, readyCodex };
+  const connectionStatus = deriveConnectionStatus(input);
+  els.status.textContent = connectionStatus.detail;
+  setConnectionState(connectionStatus);
+  renderConnectionDetails(input);
 }
 
 function setSubmitError(message) {
@@ -500,7 +710,7 @@ async function loadActiveTasks() {
   }
 
   const payload = await api(`/api/conversations/${state.activeConversationId}/tasks`);
-  state.tasks = payload.tasks ?? [];
+  state.tasks = mergePendingTasks(payload.tasks ?? [], state.activeConversationId);
   if (payload.conversation) {
     const index = state.conversations.findIndex((conversation) => conversation.id === payload.conversation.id);
     if (index >= 0) {
@@ -1020,6 +1230,9 @@ function renderMessages() {
   document.querySelectorAll("[data-cancel]").forEach((button) => {
     button.addEventListener("click", () => cancelTask(button.dataset.cancel));
   });
+  document.querySelectorAll("[data-retry-send]").forEach((button) => {
+    button.addEventListener("click", () => retryPendingSend(button.dataset.retrySend));
+  });
   finishMessageRender(scrollIntent);
 }
 
@@ -1102,11 +1315,13 @@ function renderTimeline(historyMessages, tasks, prefixHtml) {
         html: renderUserMessage(task)
       });
     }
-    items.push({
-      at: task.finishedAt || task.updatedAt || task.createdAt,
-      order: order + 1,
-      html: renderCodexMessage(task)
-    });
+    if (task.status !== "sending" && task.status !== "send_failed") {
+      items.push({
+        at: task.finishedAt || task.updatedAt || task.createdAt,
+        order: order + 1,
+        html: renderCodexMessage(task)
+      });
+    }
   });
 
   const html = items
@@ -1176,10 +1391,16 @@ function renderHistoryMessage(message) {
 }
 
 function renderUserMessage(task) {
+  const pendingStatus = task.status === "sending"
+    ? `<div class="message-send-state">正在发送...</div>`
+    : task.status === "send_failed"
+      ? `<div class="message-send-state failed">发送失败 <button data-retry-send="${escapeHtml(task.clientMessageId)}" type="button">重试</button></div>`
+      : "";
   return `
     <article class="message user-message">
       <div class="bubble">
         <div class="message-text">${escapeHtml(task.prompt)}</div>
+        ${pendingStatus}
       </div>
     </article>
   `;

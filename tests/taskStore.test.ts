@@ -48,4 +48,26 @@ describe("TaskStore", () => {
     expect(store.getTask(task.id)?.status).toBe("cancelled");
     expect(store.getTask(task.id)?.finishedAt).toBeTruthy();
   });
+
+  it("serializes tasks within the same conversation", () => {
+    const store = new TaskStore();
+    const conversation = store.createConversation({ projectId: "openclaw", title: "one" });
+    const first = store.createTask({ projectId: "openclaw", conversationId: conversation.id, prompt: "first", mode: "codex", source: "panel" });
+    const second = store.createTask({ projectId: "openclaw", conversationId: conversation.id, prompt: "second", mode: "codex", source: "panel" });
+
+    expect(store.assignNextTask("win11-main")?.id).toBe(first.id);
+    expect(store.assignNextTask("win11-main")).toBeUndefined();
+    expect(store.getTask(second.id)?.status).toBe("queued");
+  });
+
+  it("assigns tasks from different unbound conversations in parallel", () => {
+    const store = new TaskStore();
+    const firstConversation = store.createConversation({ projectId: "openclaw", title: "one" });
+    const secondConversation = store.createConversation({ projectId: "openclaw", title: "two" });
+    const first = store.createTask({ projectId: "openclaw", conversationId: firstConversation.id, prompt: "first", mode: "codex", source: "panel" });
+    const second = store.createTask({ projectId: "openclaw", conversationId: secondConversation.id, prompt: "second", mode: "codex", source: "panel" });
+
+    expect(store.assignNextTask("win11-main")?.id).toBe(first.id);
+    expect(store.assignNextTask("win11-main")?.id).toBe(second.id);
+  });
 });

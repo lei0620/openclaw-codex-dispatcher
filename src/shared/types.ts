@@ -89,6 +89,7 @@ export interface CreateTaskInput {
   mode?: string;
   source?: TaskSource;
   conversationId?: string;
+  clientMessageId?: string;
 }
 
 export interface TaskLog {
@@ -106,6 +107,7 @@ export interface TaskResult {
 
 export interface TaskRecord {
   id: string;
+  clientMessageId?: string;
   projectId: string;
   conversationId?: string;
   codexSessionId?: string;
@@ -137,6 +139,48 @@ export interface ConversationRecord {
   refreshWindowId?: string;
   messages?: ConversationMessage[];
 }
+
+export type MobileEventType =
+  | "conversation.created"
+  | "conversation.updated"
+  | "projects.updated"
+  | "task.created"
+  | "task.updated"
+  | "task.log"
+  | "approval.requested"
+  | "approval.resolved"
+  | "agent.updated"
+  | "codex.windows.updated";
+
+export interface MobileEvent {
+  eventId: number;
+  type: MobileEventType;
+  occurredAt: string;
+  conversationId?: string;
+  taskId?: string;
+  payload: Record<string, unknown>;
+}
+
+export interface MobileEventWindow {
+  events: MobileEvent[];
+  latestEventId: number;
+  resetRequired: boolean;
+}
+
+export type MobileClientMessage =
+  | {
+      type: "client.hello";
+      token: string;
+      clientId: string;
+      lastEventId?: number;
+    }
+  | { type: "client.ack"; eventId: number };
+
+export type MobileServerMessage =
+  | { type: "client.accepted"; latestEventId: number; resetRequired: boolean }
+  | { type: "event"; event: MobileEvent }
+  | { type: "sync.required"; latestEventId: number; reason: "missing_cursor" | "expired_cursor" }
+  | { type: "error"; message: string };
 
 export interface ConversationMessage {
   role: "user" | "assistant";

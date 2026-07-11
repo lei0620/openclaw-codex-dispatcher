@@ -10,6 +10,9 @@ import type {
   CodexServiceStatus,
   ConversationRecord,
   CreateTaskInput,
+  MobileEvent,
+  MobileEventType,
+  MobileEventWindow,
   ProjectConfig,
   SyncedCodexConversation,
   TaskLogStream,
@@ -22,8 +25,13 @@ import type {
 type TaskStoreEvents = "task.created" | "task.updated" | "task.cancelRequested" | "agent.updated" | "approval.resolved";
 type TaskStoreControlEvents = "codex.syncRequested" | "codex.synced";
 
+interface TaskStoreOptions {
+  mobileEventLimit?: number;
+}
+
 export class TaskStore extends EventEmitter {
   private readonly tasks = new Map<string, TaskRecord>();
+  private readonly tasksByClientMessageId = new Map<string, string>();
   private readonly order: string[] = [];
   private readonly conversations = new Map<string, ConversationRecord>();
   private readonly conversationOrder: string[] = [];
@@ -33,11 +41,18 @@ export class TaskStore extends EventEmitter {
   private readonly codexWindows = new Map<string, CodexDesktopWindow>();
   private readonly codexWindowRemarks = new Map<string, string>();
   private readonly storagePath?: string;
+  private readonly mobileEventStoragePath?: string;
+  private readonly mobileEventLimit: number;
+  private readonly mobileEvents: MobileEvent[] = [];
+  private nextMobileEventId = 1;
 
-  constructor(storagePath?: string) {
+  constructor(storagePath?: string, options: TaskStoreOptions = {}) {
     super();
     this.storagePath = storagePath;
+    this.mobileEventStoragePath = storagePath ? `${storagePath}.events.jsonl` : undefined;
+    this.mobileEventLimit = Math.max(1, options.mobileEventLimit ?? 500);
     this.load();
+    this.loadMobileEvents();
   }
 
   createConversation(input: { projectId: string; title?: string }): ConversationRecord {
@@ -53,6 +68,7 @@ export class TaskStore extends EventEmitter {
     this.conversations.set(conversation.id, conversation);
     this.conversationOrder.push(conversation.id);
     this.save();
+    this.publishMobileEvent("conversation.created", { conversation }, { conversationId: conversation.id });
     return structuredClone(conversation);
   }
 
@@ -74,6 +90,7 @@ export class TaskStore extends EventEmitter {
 
   upsertCodexConversations(input: SyncedCodexConversation[]): ConversationRecord[] {
     const records: ConversationRecord[] = [];
+    const changedRecords: ConversationRecord[] = [];
     for (const item of input) {
       const existingBySession = [...this.conversations.values()].find((conversation) => conversation.codexSessionId === item.sessionId);
       const id = existingBySession?.id ?? codexConversationId(item.sessionId);
@@ -96,15 +113,28 @@ export class TaskStore extends EventEmitter {
         this.conversationOrder.push(id);
       }
       records.push(structuredClone(record));
+      if (!existing || JSON.stringify(existing) !== JSON.stringify(record)) {
+        changedRecords.push(structuredClone(record));
+      }
     }
     if (records.length > 0) {
       this.save();
     }
     this.emit("codex.synced");
+    for (const conversation of changedRecords) {
+      this.publishMobileEvent("conversation.updated", { conversation }, { conversationId: conversation.id });
+    }
     return records;
   }
 
   createTask(input: CreateTaskInput & { mode: string; source?: TaskSource; conversationId?: string }): TaskRecord {
+    const clientMessageId = normalizeClientMessageId(input.clientMessageId);
+    if (clientMessageId) {
+      const existing = this.getTaskByClientMessageId(clientMessageId);
+      if (existing) {
+        return existing;
+      }
+    }
     const now = new Date().toISOString();
     const conversationId = input.conversationId ?? this.createConversation({ projectId: input.projectId, title: input.prompt }).id;
     const conversation = this.conversations.get(conversationId);
@@ -114,6 +144,7 @@ export class TaskStore extends EventEmitter {
     }
     const task: TaskRecord = {
       id: randomUUID(),
+      clientMessageId,
       projectId: input.projectId,
       conversationId,
       codexSessionId: conversation?.codexSessionId,
@@ -127,11 +158,15 @@ export class TaskStore extends EventEmitter {
       logs: []
     };
     this.tasks.set(task.id, task);
+    if (clientMessageId) {
+      this.tasksByClientMessageId.set(clientMessageId, task.id);
+    }
     this.order.push(task.id);
     this.touchConversation(conversationId, input.prompt, now);
     this.save();
     this.emitChange("task.created", task);
-    return task;
+    this.publishMobileEvent("task.created", { task: toRealtimeTask(task) }, { conversationId, taskId: task.id });
+    return structuredClone(task);
   }
 
   listTasks(conversationId?: string): TaskRecord[] {
@@ -144,6 +179,42 @@ export class TaskStore extends EventEmitter {
 
   getTask(taskId: string): TaskRecord | undefined {
     return this.tasks.get(taskId);
+  }
+
+  getTaskByClientMessageId(clientMessageId: string): TaskRecord | undefined {
+    const taskId = this.tasksByClientMessageId.get(normalizeClientMessageId(clientMessageId) ?? "");
+    const task = taskId ? this.tasks.get(taskId) : undefined;
+    return task ? structuredClone(task) : undefined;
+  }
+
+  getLatestMobileEventId(): number {
+    return this.nextMobileEventId - 1;
+  }
+
+  getMobileEventWindow(afterEventId: number): MobileEventWindow {
+    const latestEventId = this.getLatestMobileEventId();
+    if (!Number.isInteger(afterEventId) || afterEventId < 0 || afterEventId > latestEventId) {
+      return { events: [], latestEventId, resetRequired: true };
+    }
+    const oldestEventId = this.mobileEvents[0]?.eventId;
+    if (oldestEventId !== undefined && afterEventId < oldestEventId - 1) {
+      return { events: [], latestEventId, resetRequired: true };
+    }
+    return {
+      events: this.mobileEvents
+        .filter((event) => event.eventId > afterEventId)
+        .map((event) => structuredClone(event)),
+      latestEventId,
+      resetRequired: false
+    };
+  }
+
+  onMobileEvent(listener: (event: MobileEvent) => void): void {
+    this.on("mobile.event", listener);
+  }
+
+  offMobileEvent(listener: (event: MobileEvent) => void): void {
+    this.off("mobile.event", listener);
   }
 
   assignNextTask(agentId: string): TaskRecord | undefined {
@@ -166,6 +237,7 @@ export class TaskStore extends EventEmitter {
     task.updatedAt = now;
     this.save();
     this.emitChange("task.updated", task);
+    this.publishTaskUpdated(task);
     return structuredClone(task);
   }
 
@@ -175,6 +247,11 @@ export class TaskStore extends EventEmitter {
     task.updatedAt = new Date().toISOString();
     this.save();
     this.emitChange("task.updated", task);
+    this.publishMobileEvent(
+      "task.log",
+      { log: structuredClone(task.logs.at(-1)) },
+      { conversationId: task.conversationId, taskId: task.id }
+    );
     return task;
   }
 
@@ -192,6 +269,12 @@ export class TaskStore extends EventEmitter {
     this.approvals.set(record.id, record);
     this.save();
     this.emitChange("task.updated", task);
+    this.publishTaskUpdated(task);
+    this.publishMobileEvent(
+      "approval.requested",
+      { approval: record },
+      { conversationId: task.conversationId, taskId: task.id }
+    );
     return task;
   }
 
@@ -207,6 +290,7 @@ export class TaskStore extends EventEmitter {
     };
     this.approvals.set(record.id, record);
     this.save();
+    this.publishMobileEvent("approval.requested", { approval: record }, { taskId: record.taskId });
     return structuredClone(record);
   }
 
@@ -222,6 +306,7 @@ export class TaskStore extends EventEmitter {
     task.updatedAt = task.finishedAt;
     this.save();
     this.emitChange("task.updated", task);
+    this.publishTaskUpdated(task);
     return task;
   }
 
@@ -233,6 +318,7 @@ export class TaskStore extends EventEmitter {
     task.updatedAt = task.finishedAt;
     this.save();
     this.emitChange("task.updated", task);
+    this.publishTaskUpdated(task);
     return task;
   }
 
@@ -249,6 +335,7 @@ export class TaskStore extends EventEmitter {
     task.updatedAt = new Date().toISOString();
     this.save();
     this.emitChange("task.updated", task);
+    this.publishTaskUpdated(task);
     return task;
   }
 
@@ -260,6 +347,7 @@ export class TaskStore extends EventEmitter {
     task.updatedAt = task.finishedAt;
     this.save();
     this.emitChange("task.updated", task);
+    this.publishTaskUpdated(task);
     return task;
   }
 
@@ -286,19 +374,29 @@ export class TaskStore extends EventEmitter {
       task.status = task.status === "waiting_approval" ? "running" : task.status;
       task.updatedAt = approval.respondedAt;
       this.emitChange("task.updated", task);
+      this.publishTaskUpdated(task);
     }
     this.save();
     this.emitChange("approval.resolved", approval);
+    this.publishMobileEvent(
+      "approval.resolved",
+      { approval },
+      { conversationId: task?.conversationId, taskId: approval.taskId }
+    );
     return structuredClone(approval);
   }
 
   upsertAgent(agentId: string): AgentRecord {
     const now = new Date().toISOString();
-    const agent = this.agents.get(agentId) ?? { id: agentId, online: true, connectedAt: now, lastSeenAt: now };
+    const previous = this.agents.get(agentId);
+    const agent = previous ?? { id: agentId, online: true, connectedAt: now, lastSeenAt: now };
     agent.online = true;
     agent.lastSeenAt = now;
     this.agents.set(agentId, agent);
     this.emitChange("agent.updated", agent);
+    if (!previous || !previous.online) {
+      this.publishMobileEvent("agent.updated", { agent });
+    }
     return agent;
   }
 
@@ -307,15 +405,20 @@ export class TaskStore extends EventEmitter {
     codex: CodexServiceStatus,
     at = new Date().toISOString()
   ): void {
-    const current = this.agents.get(agentId) ?? {
+    const current = this.agents.get(agentId);
+    const previousVisibleState = current ? agentVisibleState(current) : undefined;
+    const base = current ?? {
       id: agentId,
       online: true,
       connectedAt: at,
       lastSeenAt: at
     };
-    const agent = { ...current, online: true, lastSeenAt: at, codex };
+    const agent = { ...base, online: true, lastSeenAt: at, codex };
     this.agents.set(agentId, agent);
     this.emitChange("agent.updated", agent);
+    if (!previousVisibleState || previousVisibleState !== agentVisibleState(agent)) {
+      this.publishMobileEvent("agent.updated", { agent });
+    }
   }
 
   markStaleAgentsOffline(cutoffMs: number, nowMs = Date.now()): void {
@@ -328,6 +431,8 @@ export class TaskStore extends EventEmitter {
       this.agents.set(id, offline);
       this.clearAgentCodexWindows(id);
       this.emitChange("agent.updated", offline);
+      this.publishMobileEvent("agent.updated", { agent: offline });
+      this.publishMobileEvent("codex.windows.updated", { windows: this.listCodexWindows() });
     }
   }
 
@@ -345,6 +450,8 @@ export class TaskStore extends EventEmitter {
     agent.lastSeenAt = new Date().toISOString();
     this.clearAgentCodexWindows(agentId);
     this.emitChange("agent.updated", agent);
+    this.publishMobileEvent("agent.updated", { agent });
+    this.publishMobileEvent("codex.windows.updated", { windows: this.listCodexWindows() });
     return agent;
   }
 
@@ -370,6 +477,7 @@ export class TaskStore extends EventEmitter {
       task.updatedAt = finishedAt;
       stopped.push(structuredClone(task));
       this.emitChange("task.updated", task);
+      this.publishTaskUpdated(task);
     }
     if (stopped.length > 0) {
       this.save();
@@ -382,11 +490,17 @@ export class TaskStore extends EventEmitter {
   }
 
   setAgentProjects(agentId: string, projects: ProjectConfig[]): ProjectConfig[] {
+    const previousSignature = JSON.stringify(this.agentProjects.get(agentId) ?? []);
     this.agentProjects.set(agentId, structuredClone(projects));
-    return this.listProjects();
+    const allProjects = this.listProjects();
+    if (JSON.stringify(projects) !== previousSignature) {
+      this.publishMobileEvent("projects.updated", { projects: allProjects });
+    }
+    return allProjects;
   }
 
   setAgentCodexWindows(agentId: string, windows: CodexDesktopWindow[]): CodexDesktopWindow[] {
+    const previousSignature = codexWindowListSignature(this.listCodexWindows());
     for (const [id, window] of this.codexWindows.entries()) {
       if (window.agentId === agentId) {
         this.codexWindows.delete(id);
@@ -406,7 +520,11 @@ export class TaskStore extends EventEmitter {
       };
       this.codexWindows.set(normalized.id, normalized);
     }
-    return this.listCodexWindows();
+    const allWindows = this.listCodexWindows();
+    if (codexWindowListSignature(allWindows) !== previousSignature) {
+      this.publishMobileEvent("codex.windows.updated", { windows: allWindows });
+    }
+    return allWindows;
   }
 
   listCodexWindows(): CodexDesktopWindow[] {
@@ -477,6 +595,7 @@ export class TaskStore extends EventEmitter {
     conversation.refreshWindowId = normalized || undefined;
     conversation.updatedAt = new Date().toISOString();
     this.save();
+    this.publishMobileEvent("conversation.updated", { conversation }, { conversationId: conversation.id });
     return structuredClone(conversation);
   }
 
@@ -495,6 +614,7 @@ export class TaskStore extends EventEmitter {
     }
     window.updatedAt = new Date().toISOString();
     this.save();
+    this.publishMobileEvent("codex.windows.updated", { windows: this.listCodexWindows() });
     return structuredClone(window);
   }
 
@@ -548,6 +668,14 @@ export class TaskStore extends EventEmitter {
     this.emit(event, structuredClone(record));
   }
 
+  private publishTaskUpdated(task: TaskRecord): void {
+    this.publishMobileEvent(
+      "task.updated",
+      { task: toRealtimeTask(task) },
+      { conversationId: task.conversationId, taskId: task.id }
+    );
+  }
+
   private touchConversation(conversationId: string, prompt: string, updatedAt: string): void {
     const conversation = this.conversations.get(conversationId);
     if (!conversation) {
@@ -597,8 +725,71 @@ export class TaskStore extends EventEmitter {
         task.pendingApproval = undefined;
       }
       this.tasks.set(task.id, task);
+      const clientMessageId = normalizeClientMessageId(task.clientMessageId);
+      if (clientMessageId) {
+        task.clientMessageId = clientMessageId;
+        this.tasksByClientMessageId.set(clientMessageId, task.id);
+      }
       this.order.push(task.id);
     }
+  }
+
+  private loadMobileEvents(): void {
+    if (!this.mobileEventStoragePath || !fs.existsSync(this.mobileEventStoragePath)) {
+      return;
+    }
+    const events = fs
+      .readFileSync(this.mobileEventStoragePath, "utf8")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .flatMap((line) => {
+        try {
+          const event = JSON.parse(line) as MobileEvent;
+          return Number.isInteger(event.eventId) && event.eventId > 0 ? [event] : [];
+        } catch {
+          return [];
+        }
+      })
+      .sort((a, b) => a.eventId - b.eventId)
+      .slice(-this.mobileEventLimit);
+    this.mobileEvents.push(...events);
+    this.nextMobileEventId = (events.at(-1)?.eventId ?? 0) + 1;
+    if (events.length > 0) {
+      this.rewriteMobileEventFile();
+    }
+  }
+
+  private publishMobileEvent(
+    type: MobileEventType,
+    payload: Record<string, unknown>,
+    refs: { conversationId?: string; taskId?: string } = {}
+  ): MobileEvent {
+    const event: MobileEvent = {
+      eventId: this.nextMobileEventId++,
+      type,
+      occurredAt: new Date().toISOString(),
+      ...refs,
+      payload: structuredClone(payload)
+    };
+    this.mobileEvents.push(event);
+    if (this.mobileEvents.length > this.mobileEventLimit) {
+      this.mobileEvents.splice(0, this.mobileEvents.length - this.mobileEventLimit);
+      this.rewriteMobileEventFile();
+    } else if (this.mobileEventStoragePath) {
+      fs.mkdirSync(path.dirname(this.mobileEventStoragePath), { recursive: true });
+      fs.appendFileSync(this.mobileEventStoragePath, `${JSON.stringify(event)}\n`, "utf8");
+    }
+    this.emit("mobile.event", structuredClone(event));
+    return event;
+  }
+
+  private rewriteMobileEventFile(): void {
+    if (!this.mobileEventStoragePath) {
+      return;
+    }
+    fs.mkdirSync(path.dirname(this.mobileEventStoragePath), { recursive: true });
+    const content = this.mobileEvents.map((event) => JSON.stringify(event)).join("\n");
+    fs.writeFileSync(this.mobileEventStoragePath, content ? `${content}\n` : "", "utf8");
   }
 
   private save(): void {
@@ -630,10 +821,42 @@ function normalizeWindowRemark(remark: string | undefined): string {
   return (remark ?? "").trim().replace(/\s+/g, " ").slice(0, 24);
 }
 
+function normalizeClientMessageId(clientMessageId: string | undefined): string | undefined {
+  const normalized = (clientMessageId ?? "").trim().slice(0, 128);
+  return normalized || undefined;
+}
+
+function toRealtimeTask(task: TaskRecord): TaskRecord {
+  return { ...structuredClone(task), logs: [] };
+}
+
+function agentVisibleState(agent: AgentRecord): string {
+  return JSON.stringify({
+    online: agent.online,
+    phase: agent.codex?.phase,
+    ready: agent.codex?.ready,
+    error: agent.codex?.error
+  });
+}
+
+function codexWindowListSignature(windows: CodexDesktopWindow[]): string {
+  return JSON.stringify(
+    windows.map((window) => ({
+      id: window.id,
+      agentId: window.agentId,
+      handle: window.handle,
+      processId: window.processId,
+      title: window.title,
+      remark: window.remark,
+      startedAt: window.startedAt
+    }))
+  );
+}
+
 function codexConversationId(sessionId: string): string {
   return `codex:${sessionId}`;
 }
 
 function getTaskSlotKey(task: TaskRecord): string {
-  return task.refreshWindowId || "default";
+  return task.refreshWindowId || task.conversationId || "default";
 }

@@ -45,4 +45,10 @@ describe("static panel assets", () => {
 
     expect(response.headers["cache-control"]).toBe("no-store");
   });
+
+  it.each(["/realtimeClient.js", "/realtimeState.js"])("prevents stale caches for %s", async (asset) => {
+    const response = await request(createApp(config, new TaskStore())).get(asset).expect(200);
+
+    expect(response.headers["cache-control"]).toBe("no-store");
+  });
 });

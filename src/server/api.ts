@@ -14,7 +14,8 @@ const createTaskSchema = z.object({
   conversationId: z.string().min(1).optional(),
   prompt: z.string().min(1),
   mode: z.string().min(1).optional(),
-  source: z.enum(["panel", "wechat", "openclaw", "api"]).default("api")
+  source: z.enum(["panel", "wechat", "openclaw", "api"]).default("api"),
+  clientMessageId: z.string().trim().min(8).max(128).optional()
 });
 
 const createConversationSchema = z.object({
@@ -61,6 +62,16 @@ export function createApiRouter({ config, store }: ApiDeps): express.Router {
 
   router.get("/projects", (_req, res) => {
     res.json({ projects: store.listProjects(config.projects) });
+  });
+
+  router.get("/events", (req, res) => {
+    const rawAfter = typeof req.query.after === "string" ? req.query.after : "0";
+    const afterEventId = Number.parseInt(rawAfter, 10);
+    if (!Number.isInteger(afterEventId) || afterEventId < 0) {
+      res.status(400).json({ error: "after must be a non-negative event id" });
+      return;
+    }
+    res.json(store.getMobileEventWindow(afterEventId));
   });
 
   router.get("/conversations", (req, res) => {
@@ -164,6 +175,24 @@ export function createApiRouter({ config, store }: ApiDeps): express.Router {
   router.post("/tasks", (req, res) => {
     const body = createTaskSchema.parse(req.body);
     const project = resolveProject(store.listProjects(config.projects), body.projectId, body.mode);
+    const mode = body.mode ?? project.defaultMode;
+    const existingTask = body.clientMessageId
+      ? store.getTaskByClientMessageId(body.clientMessageId)
+      : undefined;
+    if (existingTask) {
+      if (
+        existingTask.projectId !== body.projectId ||
+        (body.conversationId !== undefined && existingTask.conversationId !== body.conversationId) ||
+        existingTask.prompt !== body.prompt ||
+        existingTask.mode !== mode ||
+        existingTask.source !== body.source
+      ) {
+        res.status(409).json({ error: "clientMessageId is already used by a different message" });
+        return;
+      }
+      res.json({ task: existingTask, deduplicated: true });
+      return;
+    }
     let conversation: ConversationRecord | undefined;
     if (body.conversationId) {
       conversation = store.getConversation(body.conversationId);
@@ -172,7 +201,6 @@ export function createApiRouter({ config, store }: ApiDeps): express.Router {
         return;
       }
     }
-    const mode = body.mode ?? project.defaultMode;
     const windowBindingError = getWindowBindingError(config, store.listCodexWindows(), conversation, mode);
     if (windowBindingError) {
       res.status(409).json({ error: windowBindingError });

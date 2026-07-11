@@ -102,6 +102,77 @@ describe("task api", () => {
     });
   });
 
+  it("returns the existing task when the same clientMessageId is retried", async () => {
+    const store = new TaskStore();
+    const app = buildAppWithStore(store);
+    const conversation = store.createConversation({ projectId: "openclaw", title: "幂等发送" });
+    const body = {
+      projectId: "openclaw",
+      conversationId: conversation.id,
+      prompt: "只能执行一次",
+      mode: "codex",
+      source: "panel",
+      clientMessageId: "phone-message-retry-1"
+    };
+
+    const first = await request(app)
+      .post("/api/tasks")
+      .set("Authorization", "Bearer panel-token")
+      .send(body)
+      .expect(201);
+    const retry = await request(app)
+      .post("/api/tasks")
+      .set("Authorization", "Bearer panel-token")
+      .send(body)
+      .expect(200);
+
+    expect(retry.body).toMatchObject({ deduplicated: true, task: { id: first.body.task.id } });
+    expect(store.listTasks()).toHaveLength(1);
+  });
+
+  it("deduplicates a retry when the first request created its conversation", async () => {
+    const store = new TaskStore();
+    const app = buildAppWithStore(store);
+    const body = {
+      projectId: "openclaw",
+      prompt: "新对话第一条",
+      mode: "codex",
+      source: "panel",
+      clientMessageId: "phone-created-conversation-1"
+    };
+
+    const first = await request(app)
+      .post("/api/tasks")
+      .set("Authorization", "Bearer panel-token")
+      .send(body)
+      .expect(201);
+    const retry = await request(app)
+      .post("/api/tasks")
+      .set("Authorization", "Bearer panel-token")
+      .send(body)
+      .expect(200);
+
+    expect(retry.body).toMatchObject({ deduplicated: true, task: { id: first.body.task.id } });
+    expect(retry.body.task.conversationId).toBe(first.body.task.conversationId);
+    expect(store.listTasks()).toHaveLength(1);
+  });
+
+  it("exposes ordered mobile events after a cursor", async () => {
+    const store = new TaskStore();
+    const app = buildAppWithStore(store);
+    const cursor = store.getLatestMobileEventId();
+    store.createConversation({ projectId: "openclaw", title: "事件接口" });
+
+    const response = await request(app)
+      .get(`/api/events?after=${cursor}`)
+      .set("Authorization", "Bearer panel-token")
+      .expect(200);
+
+    expect(response.body).toMatchObject({ resetRequired: false });
+    expect(response.body.events).toMatchObject([{ type: "conversation.created" }]);
+    expect(response.body.latestEventId).toBeGreaterThan(cursor);
+  });
+
   it("rejects missing panel token", async () => {
     await request(buildApp()).post("/api/tasks").send({ projectId: "openclaw", prompt: "x" }).expect(401);
   });

@@ -1184,6 +1184,26 @@ textarea {
   padding: 9px 14px;
 }
 
+.message-send-state {
+  margin-top: 5px;
+  color: #71717a;
+  font-size: 12px;
+}
+
+.message-send-state.failed {
+  color: #b42318;
+}
+
+.message-send-state button {
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  font: inherit;
+  font-weight: 650;
+}
+
 .user-message .message-text {
   line-height: 1.48;
 }

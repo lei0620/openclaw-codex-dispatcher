@@ -119,4 +119,15 @@ describe("mobile panel copy", () => {
 
     expect(config).toContain('loggingBehavior: "none"');
   });
+
+  it("uses realtime NAS events with a slow reconciliation fallback", () => {
+    const js = fs.readFileSync("public/app.js", "utf8");
+
+    expect(js).toContain('createRealtimeClient');
+    expect(js).toContain('applyMobileEvent');
+    expect(js).toContain('clientMessageId');
+    expect(js).toContain('retryPendingSend');
+    expect(js).toContain('setInterval(() => refresh(), 30000)');
+    expect(js).not.toContain('setInterval(() => refresh(), 2000)');
+  });
 });
