@@ -28,7 +28,7 @@ export async function runDesktopInputTask(
 
   const startedAt = Date.now();
   onLog("system", "desktop input: sending prompt to the visible Codex window\n");
-  await sendPromptToCodexDesktop(config, task.prompt, task.refreshWindowId, signal, onLog);
+  await sendPromptToCodexDesktop(config, task.prompt, task.refreshWindowId, task.codexSessionId, signal, onLog);
 
   if (signal.aborted) {
     return { exitCode: 1, summary: "Cancelled by request.", diffSummary: "not checked" };
@@ -63,6 +63,7 @@ async function sendPromptToCodexDesktop(
   config: DesktopInputConfig,
   prompt: string,
   refreshWindowId: string | undefined,
+  codexSessionId: string | undefined,
   signal: AbortSignal,
   onLog: (stream: TaskLogStream, text: string) => void
 ): Promise<void> {
@@ -72,7 +73,7 @@ async function sendPromptToCodexDesktop(
     const scriptPath = path.resolve(config.scriptPath);
     const child = spawn(
       "powershell.exe",
-      buildDesktopInputScriptArgs(scriptPath, promptFile, config, refreshWindowId),
+      buildDesktopInputScriptArgs(scriptPath, promptFile, config, refreshWindowId, codexSessionId),
       {
         windowsHide: true,
         stdio: ["pipe", "pipe", "pipe"]
@@ -115,7 +116,8 @@ export function buildDesktopInputScriptArgs(
   scriptPath: string,
   promptFile: string,
   config: DesktopInputConfig,
-  refreshWindowId?: string
+  refreshWindowId?: string,
+  codexSessionId?: string
 ): string[] {
   const args = [
     "-Sta",
@@ -137,6 +139,9 @@ export function buildDesktopInputScriptArgs(
   }
   if (target.handle) {
     args.push("-WindowHandle", target.handle);
+  }
+  if (codexSessionId) {
+    args.push("-CodexSessionId", codexSessionId);
   }
   return args;
 }

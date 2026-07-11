@@ -3,7 +3,8 @@ param(
   [int]$ClickYOffset = 92,
   [string]$WindowTitlePattern = "Codex|OpenAI",
   [string]$WindowProcessId = "",
-  [string]$WindowHandle = ""
+  [string]$WindowHandle = "",
+  [string]$CodexSessionId = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -75,6 +76,15 @@ if ($PromptFile) {
 }
 if ([string]::IsNullOrWhiteSpace($text)) {
   throw "No prompt text was provided."
+}
+
+if ($CodexSessionId.Trim()) {
+  if ($CodexSessionId -notmatch '^[0-9a-fA-F-]{36}$') {
+    throw "Invalid Codex session id."
+  }
+  $threadUri = "codex://threads/$CodexSessionId"
+  Start-Process -FilePath $threadUri | Out-Null
+  Start-Sleep -Milliseconds 900
 }
 
 function Set-CodexForeground([IntPtr]$targetHandle, [bool]$requireExactHandle) {

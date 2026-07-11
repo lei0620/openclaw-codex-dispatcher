@@ -47,6 +47,22 @@ describe("desktop input targeting", () => {
     expect(args).toContain("123456");
     expect(args).not.toContain("-WindowProcessId");
   });
+
+  it("opens the exact Codex desktop session before typing into the bound window", () => {
+    const sessionId = "019ea021-ef66-7fd2-8e09-f2c6d26d0c4d";
+    const args = buildDesktopInputScriptArgs(
+      "scripts/send-codex-desktop-input.ps1",
+      "C:/Temp/prompt.txt",
+      config,
+      "LEI-PC:hwnd:123456",
+      sessionId
+    );
+    const script = fs.readFileSync("scripts/send-codex-desktop-input.ps1", "utf8");
+
+    expect(args).toEqual(expect.arrayContaining(["-CodexSessionId", sessionId]));
+    expect(script).toContain('"codex://threads/$CodexSessionId"');
+    expect(script).toContain("Start-Process -FilePath $threadUri");
+  });
 });
 
 describe("desktop reply capture", () => {

@@ -50,6 +50,9 @@ export function selectCodexExecutionPlan(
     return ["cli"];
   }
   if (isDesktopSyncedTask(task)) {
+    if (task.refreshWindowId && desktopInput.enabled) {
+      return ["desktop-input"];
+    }
     return appServer.enabled ? ["app-server"] : [];
   }
   if (task.source === "panel" && appServer.enabled) {
@@ -86,6 +89,7 @@ export async function runCodexTask(
 
   const codexSessionId = getCodexSessionId(task);
   const requiresAppServer = isDesktopSyncedTask(task) || isPhoneConversationTask(task);
+  const requiresDesktopInput = isDesktopSyncedTask(task) && Boolean(task.refreshWindowId) && desktopInput.enabled;
   const plan = selectCodexExecutionPlan(appServer, desktopInput, task);
   if (plan.length === 0) {
     return desktopAppServerUnavailableResult("Codex desktop app-server is not enabled for this synced desktop session.");
@@ -118,10 +122,11 @@ export async function runCodexTask(
         if (signal.aborted) {
           return { exitCode: 1, summary: "Cancelled by request.", diffSummary: "not checked" };
         }
-        onLog(
-          "system",
-          `unsafe foreground desktop input unavailable; falling back to Codex CLI: ${error instanceof Error ? error.message : String(error)}`
-        );
+        const message = `Codex desktop input unavailable: ${error instanceof Error ? error.message : String(error)}`;
+        onLog("system", `${message}\n`);
+        if (requiresDesktopInput) {
+          return { exitCode: 1, summary: message, diffSummary: "not checked" };
+        }
       }
       continue;
     }

@@ -53,7 +53,7 @@
     "refreshTimeoutMs": 8000
   },
   "desktopInput": {
-    "enabled": false,
+    "enabled": true,
     "allowUnsafeForegroundRouting": false,
     "scriptPath": "scripts/send-codex-desktop-input.ps1",
     "clickYOffset": 92,

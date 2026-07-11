@@ -85,7 +85,7 @@ describe("buildCodexSpawn", () => {
     expect(detectApprovalPrompt("ordinary task output")).toBeUndefined();
   });
 
-  it("uses app-server for synced Codex conversations even when a desktop window is bound", () => {
+  it("uses the bound desktop window for an existing synced Codex conversation", () => {
     const task = createRunnerTask({
       source: "panel",
       codexSessionId: "019ea06b-17d8-7a32-8106-334d3ae55286",
@@ -105,7 +105,7 @@ describe("buildCodexSpawn", () => {
         },
         task
       )
-    ).toEqual(["app-server"]);
+    ).toEqual(["desktop-input"]);
   });
 
   it("uses app-server to create a real desktop conversation for new phone panel chats", () => {
@@ -130,7 +130,7 @@ describe("buildCodexSpawn", () => {
     ).toEqual(["app-server"]);
   });
 
-  it("does not use desktop input for a synced Codex conversation when app-server is disabled", () => {
+  it("can use exact desktop session routing even when the separate app-server is disabled", () => {
     const task = createRunnerTask({
       source: "panel",
       codexSessionId: "019ea06b-17d8-7a32-8106-334d3ae55286",
@@ -150,7 +150,7 @@ describe("buildCodexSpawn", () => {
         },
         task
       )
-    ).toEqual([]);
+    ).toEqual(["desktop-input"]);
   });
 
   it("does not fall back to CLI when a desktop Codex session task cannot use app-server", async () => {
