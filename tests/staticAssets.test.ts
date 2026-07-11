@@ -1,5 +1,6 @@
 import request from "supertest";
 import { describe, expect, it } from "vitest";
+import fs from "node:fs";
 import { createApp } from "../src/server/app.js";
 import { TaskStore } from "../src/server/taskStore.js";
 import type { DispatcherConfig } from "../src/shared/types.js";
@@ -34,6 +35,16 @@ const config: DispatcherConfig = {
 };
 
 describe("static panel assets", () => {
+  it("ships six transparent 192px generated header icons", () => {
+    for (const name of ["menu", "window", "device", "sync", "approval", "settings"]) {
+      const file = fs.readFileSync(`public/icons/${name}.png`);
+      expect(file.subarray(1, 4).toString()).toBe("PNG");
+      expect(file.readUInt32BE(16)).toBe(192);
+      expect(file.readUInt32BE(20)).toBe(192);
+      expect([4, 6]).toContain(file[25]);
+    }
+  });
+
   it("prevents stale mobile WebView caches for panel scripts", async () => {
     const response = await request(createApp(config, new TaskStore())).get("/app.js").expect(200);
 
