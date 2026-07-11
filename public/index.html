@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>手机遥控 Codex</title>
-    <link rel="stylesheet" href="/styles.css?v=1.6.0" />
+    <link rel="stylesheet" href="/styles.css?v=1.7.0" />
   </head>
   <body>
     <div id="sidebar-scrim" class="sidebar-scrim" hidden></div>
@@ -66,6 +66,7 @@
 
         <section class="chat-panel" aria-label="Codex 对话">
           <div id="messages" class="messages" aria-live="polite"></div>
+          <button id="jump-to-latest" class="jump-to-latest" type="button" hidden>回到最新</button>
           <p id="submit-error" class="submit-error" role="alert" hidden></p>
           <form id="chat-form" class="chat-form">
             <textarea
@@ -132,6 +133,15 @@
       </section>
 
       <section class="settings-section">
+        <h3>连接诊断</h3>
+        <div id="diagnostics-summary" class="diagnostics-grid"></div>
+        <div class="settings-actions">
+          <button id="export-diagnostics" class="secondary" type="button">复制脱敏诊断</button>
+        </div>
+        <p id="diagnostics-status" class="settings-hint" hidden></p>
+      </section>
+
+      <section class="settings-section">
         <h3>应用更新</h3>
         <div class="version-card">
           <div>
@@ -147,6 +157,6 @@
         <p id="update-status" class="update-status" hidden></p>
       </section>
     </aside>
-    <script type="module" src="/app.js?v=1.6.0"></script>
+    <script type="module" src="/app.js?v=1.7.0"></script>
   </body>
 </html>

@@ -2,11 +2,13 @@ import { createRefreshGate } from "/refreshGate.js";
 import { deriveConnectionStatus } from "/connectionStatus.js";
 import { createRealtimeClient } from "/realtimeClient.js";
 import { applyMobileEvent } from "/realtimeState.js";
+import { createLifecycleRecovery } from "/lifecycleRecovery.js";
+import { buildDiagnosticsSnapshot, formatSanitizedDiagnostics } from "/diagnostics.js";
 
 const lanApiBase = "http://192.168.101.8:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.6.0";
-const releaseNotes = "消息通过 NAS 实时同步；断线后自动补发缺失事件；发送失败可原消息重试且不会重复执行；同窗口串行、不同会话可并行。";
+const appVersion = "1.7.0";
+const releaseNotes = "切回 App 自动恢复实时连接；阅读历史时不再被新消息拉到底部；新增会话状态标记、回到最新按钮和一键脱敏诊断。";
 let token = localStorage.getItem("openclawToken") || defaultDispatcherToken;
 let apiBase = getStoredApiBase();
 
@@ -30,6 +32,11 @@ const state = {
   approvals: [],
   agents: [],
   codexWindows: [],
+  health: null,
+  latencyMs: null,
+  realtimeState: "connecting",
+  latestError: "",
+  conversationTaskStates: {},
   pendingSends: loadPendingSends(),
   activeProjectId: localStorage.getItem(selectionKeys.project) || "",
   activeConversationId: localStorage.getItem(selectionKeys.conversation) || "",
@@ -41,11 +48,13 @@ const state = {
 
 const scrollState = {
   activeConversationId: "",
-  forceBottom: true
+  forceBottom: true,
+  unread: false
 };
 
 let knownPendingApprovalIds = new Set();
 let realtime;
+let lifecycleRecovery;
 const refresh = createRefreshGate(refreshNow);
 
 const modeLabels = {
@@ -98,6 +107,7 @@ const els = {
   resetToken: document.querySelector("#reset-token"),
   agents: document.querySelector("#agents"),
   messages: document.querySelector("#messages"),
+  jumpToLatest: document.querySelector("#jump-to-latest"),
   activeSessions: document.querySelector("#active-sessions"),
   currentWindowToggle: document.querySelector("#current-window-toggle"),
   currentWindowLabel: document.querySelector("#current-window-label"),
@@ -119,7 +129,10 @@ const els = {
   settingsOpen: document.querySelector("#settings-open"),
   settingsClose: document.querySelector("#settings-close"),
   settingsScrim: document.querySelector("#settings-scrim"),
-  autoFollowConversation: document.querySelector("#auto-follow-conversation")
+  autoFollowConversation: document.querySelector("#auto-follow-conversation"),
+  diagnosticsSummary: document.querySelector("#diagnostics-summary"),
+  exportDiagnostics: document.querySelector("#export-diagnostics"),
+  diagnosticsStatus: document.querySelector("#diagnostics-status")
 };
 
 function getLatestConversation() {
@@ -164,6 +177,13 @@ els.currentWindowToggle.addEventListener("click", toggleWindowPicker);
 els.settingsOpen.addEventListener("click", openSettings);
 els.settingsClose.addEventListener("click", closeSettings);
 els.settingsScrim.addEventListener("click", closeSettings);
+els.jumpToLatest.addEventListener("click", jumpToLatestMessage);
+els.exportDiagnostics.addEventListener("click", exportDiagnostics);
+els.messages.addEventListener("scroll", () => {
+  if (isMessageListNearBottom()) {
+    clearActiveConversationUnread();
+  }
+});
 
 initAndroidUpdateControls();
 renderAppVersion();
@@ -179,6 +199,11 @@ realtime = createRealtimeClient({
   onState: renderRealtimeConnectionState
 });
 realtime.start();
+lifecycleRecovery = createLifecycleRecovery({
+  restartRealtime: () => realtime.restart(),
+  reconcile: () => refresh()
+});
+lifecycleRecovery.start();
 setInterval(() => refresh(), 30000);
 
 function getAndroidUpdater() {
@@ -290,7 +315,11 @@ async function refreshNow() {
 
   try {
     const projectsPayload = await api("/api/projects");
-    const healthPayload = api("/api/health");
+    const healthStartedAt = performance.now();
+    const healthPayload = api("/api/health").then((payload) => {
+      state.latencyMs = Math.max(0, Math.round(performance.now() - healthStartedAt));
+      return payload;
+    });
     const agentsPayload = api("/api/agents");
     const approvalsPayload = api("/api/approvals?status=pending");
     const windowsPayload = api("/api/codex-windows");
@@ -300,6 +329,8 @@ async function refreshNow() {
     const approvals = await approvalsPayload;
     const windows = await windowsPayload;
     const health = await healthPayload;
+    state.health = health;
+    state.latestError = "";
     state.projects = projects;
     state.conversations = conversations;
     state.agents = agents.agents ?? [];
@@ -320,10 +351,12 @@ async function refreshNow() {
     setConnectionState(connectionStatus);
     renderConnectionDetails(connectionInput);
   } catch (error) {
+    state.latestError = error?.message || String(error);
     els.status.textContent = "连接失败，请检查服务地址、密码或 NAS 服务";
     setConnectionState({ level: "offline", label: "未连接", detail: "无法连接 NAS" });
     renderConnectionDetails({ nasReachable: false, onlineAgents: 0, readyCodex: 0 });
     els.messages.innerHTML = `<div class="empty">连接失败：${escapeHtml(describeConnectionError(error))}</div>`;
+    renderDiagnostics();
   }
 }
 
@@ -595,8 +628,16 @@ function setRealtimeCursor(eventId) {
 }
 
 async function handleRealtimeEvent(event) {
+  const affectsActiveConversation = event.conversationId === state.activeConversationId;
+  const userIsReadingHistory = affectsActiveConversation && !isMessageListNearBottom();
   applyMobileEvent(state, event);
+  if (event.payload?.task?.conversationId) {
+    updateConversationStatusFromTask(event.payload.task);
+  }
   persistPendingSends();
+  if (userIsReadingHistory) {
+    markActiveConversationUnread();
+  }
   renderConnectionFromRealtimeState();
   renderAll();
 }
@@ -607,10 +648,12 @@ async function reconcileRealtimeState({ latestEventId }) {
 }
 
 function renderRealtimeConnectionState(realtimeState) {
+  state.realtimeState = realtimeState;
   els.status.dataset.realtime = realtimeState;
   if (realtimeState === "reconnecting") {
     els.statusIcon.title = `${els.statusIcon.title || "NAS 已连接"}，实时通道正在重连`;
   }
+  renderDiagnostics();
 }
 
 function renderConnectionFromRealtimeState() {
@@ -723,7 +766,9 @@ async function loadActiveTasks() {
 
 async function loadActiveSessionTasks() {
   const payload = await api("/api/tasks");
-  return (payload.tasks ?? [])
+  const tasks = payload.tasks ?? [];
+  updateConversationTaskStates(tasks);
+  return tasks
     .filter(isActiveTask)
     .sort(compareActiveTasks);
 }
@@ -750,6 +795,8 @@ function renderAll() {
   renderActiveSessions();
   renderConversationSidebar();
   renderMessages();
+  renderJumpToLatest();
+  renderDiagnostics();
 }
 
 function renderHeader() {
@@ -800,12 +847,144 @@ function renderProjectGroup(project) {
 function renderConversationItem(conversation) {
   const active = conversation.id === state.activeConversationId;
   const source = conversation.source === "codex" ? "电脑" : "手机";
+  const marker = getConversationStatusMarker(conversation.id);
   return `
     <button class="conversation-item ${active ? "active" : ""}" data-conversation-id="${escapeHtml(conversation.id)}" type="button">
-      <span>${escapeHtml(conversation.title)}</span>
+      <span class="conversation-item-main"><span>${escapeHtml(conversation.title)}</span>${marker ? `<span class="conversation-status-marker ${escapeHtml(marker.status)}">${escapeHtml(marker.label)}</span>` : ""}</span>
       <time>${escapeHtml(source)} ${formatRelativeTime(conversation.updatedAt)}</time>
     </button>
   `;
+}
+
+function updateConversationTaskStates(tasks) {
+  const grouped = new Map();
+  for (const task of tasks) {
+    if (!task.conversationId) continue;
+    const group = grouped.get(task.conversationId) ?? [];
+    group.push(task);
+    grouped.set(task.conversationId, group);
+  }
+  const statuses = {};
+  for (const [conversationId, conversationTasks] of grouped) {
+    const active = conversationTasks
+      .filter(isActiveTask)
+      .sort(compareActiveTasks)[0];
+    if (active) {
+      statuses[conversationId] = active.status;
+      continue;
+    }
+    const latest = conversationTasks[0];
+    if (latest?.status === "failed") {
+      statuses[conversationId] = "failed";
+    }
+  }
+  state.conversationTaskStates = statuses;
+}
+
+function updateConversationStatusFromTask(task) {
+  const active = state.activeTasks
+    .filter((item) => item.conversationId === task.conversationId)
+    .sort(compareActiveTasks)[0];
+  if (active) {
+    state.conversationTaskStates[task.conversationId] = active.status;
+  } else if (task.status === "failed") {
+    state.conversationTaskStates[task.conversationId] = "failed";
+  } else {
+    delete state.conversationTaskStates[task.conversationId];
+  }
+}
+
+function getConversationStatusMarker(conversationId) {
+  const status = state.conversationTaskStates[conversationId];
+  if (status === "waiting_approval") return { status, label: "等授权" };
+  if (status === "running") return { status, label: "执行中" };
+  if (status === "queued" || status === "cancelling") return { status: "queued", label: "排队" };
+  if (status === "failed") return { status, label: "失败" };
+  return undefined;
+}
+
+function renderDiagnostics() {
+  const snapshot = getDiagnosticsSnapshot();
+  const rows = [
+    ["NAS", snapshot.nas.reachable ? `${snapshot.nas.latencyMs ?? "-"} ms` : "未连接"],
+    ["实时消息", describeRealtimeState(snapshot.nas.realtimeState)],
+    ["Win11", snapshot.agent?.online ? `${snapshot.agent.id} 在线` : "未上线"],
+    ["最近心跳", snapshot.agent?.lastSeenAt ? formatRelativeTime(snapshot.agent.lastSeenAt) : "暂无"],
+    ["Codex", snapshot.codex.ready ? "可用" : snapshot.agent?.online ? "恢复中" : "等待电脑"],
+    ["当前会话", snapshot.conversation?.id ?? "未选择"],
+    ["Codex 对话", snapshot.conversation?.threadId ?? "首次发送后创建"],
+    ["待处理权限", String(snapshot.pendingApprovals)],
+    ["正在执行", String(snapshot.activeTasks)]
+  ];
+  if (snapshot.latestError) {
+    rows.push(["最近错误", "可在脱敏诊断中查看"]);
+  }
+  els.diagnosticsSummary.innerHTML = rows
+    .map(([label, value]) => `<div class="diagnostics-row"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`)
+    .join("");
+}
+
+function getDiagnosticsSnapshot() {
+  return buildDiagnosticsSnapshot({
+    appVersion,
+    apiBase,
+    realtimeState: state.realtimeState,
+    lastEventId: getRealtimeCursor(),
+    health: state.health,
+    latencyMs: state.latencyMs,
+    agents: state.agents,
+    codexWindows: state.codexWindows,
+    conversation: getActiveConversation(),
+    pendingApprovals: state.approvals.length,
+    activeTasks: state.activeTasks.length,
+    latestError: state.latestError
+  });
+}
+
+function describeRealtimeState(value) {
+  return {
+    online: "已连接",
+    connecting: "连接中",
+    reconnecting: "正在重连",
+    syncing: "正在补齐消息",
+    stopped: "未启动"
+  }[value] ?? "检查中";
+}
+
+async function exportDiagnostics() {
+  const report = formatSanitizedDiagnostics(getDiagnosticsSnapshot());
+  els.exportDiagnostics.disabled = true;
+  try {
+    let copied = false;
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(report);
+        copied = true;
+      } catch {
+        copied = false;
+      }
+    }
+    if (!copied) {
+      const field = document.createElement("textarea");
+      field.value = report;
+      field.style.position = "fixed";
+      field.style.opacity = "0";
+      document.body.appendChild(field);
+      field.select();
+      copied = document.execCommand("copy");
+      field.remove();
+    }
+    if (!copied) {
+      throw new Error("clipboard unavailable");
+    }
+    els.diagnosticsStatus.textContent = "脱敏诊断已复制，可以直接发给我排查。";
+  } catch (error) {
+    state.latestError = error?.message || String(error);
+    els.diagnosticsStatus.textContent = "复制失败，请稍后再试。";
+  } finally {
+    els.diagnosticsStatus.hidden = false;
+    els.exportDiagnostics.disabled = false;
+  }
 }
 
 function renderActiveSessions() {
@@ -1238,6 +1417,30 @@ function renderMessages() {
 
 function requestMessageScrollToBottom() {
   scrollState.forceBottom = true;
+  clearActiveConversationUnread();
+}
+
+function markActiveConversationUnread() {
+  scrollState.unread = true;
+  renderJumpToLatest();
+}
+
+function clearActiveConversationUnread() {
+  if (!scrollState.unread) {
+    return;
+  }
+  scrollState.unread = false;
+  renderJumpToLatest();
+}
+
+function renderJumpToLatest() {
+  els.jumpToLatest.hidden = !scrollState.unread;
+}
+
+function jumpToLatestMessage() {
+  clearActiveConversationUnread();
+  requestMessageScrollToBottom();
+  renderMessages();
 }
 
 function captureMessageScrollIntent() {
@@ -1254,11 +1457,13 @@ function captureMessageScrollIntent() {
 function finishMessageRender(intent) {
   if (intent.shouldStickToBottom) {
     els.messages.scrollTop = els.messages.scrollHeight;
+    scrollState.unread = false;
   } else {
     els.messages.scrollTop = Math.min(intent.previousScrollTop, els.messages.scrollHeight);
   }
   scrollState.activeConversationId = intent.conversationId;
   scrollState.forceBottom = false;
+  renderJumpToLatest();
 }
 
 function isMessageListNearBottom() {
@@ -1554,6 +1759,12 @@ function isNoisyLog(line) {
 }
 
 function renderEmptyState() {
+  state.health = null;
+  state.latencyMs = null;
+  state.agents = [];
+  state.codexWindows = [];
+  state.approvals = [];
+  state.realtimeState = "stopped";
   els.currentProjectName.textContent = "手机遥控 Codex";
   els.conversationTitle.textContent = "像和 Codex 聊天一样发任务";
   state.windowPickerOpen = false;
@@ -1578,6 +1789,7 @@ function renderEmptyState() {
   els.approvalInbox.hidden = true;
   els.approvalInbox.innerHTML = "";
   els.messages.innerHTML = `<div class="empty">保存访问密码后就可以像聊天一样给 Codex 发任务。</div>`;
+  renderDiagnostics();
 }
 
 function ensureSelection() {

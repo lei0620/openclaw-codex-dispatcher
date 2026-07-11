@@ -130,4 +130,37 @@ describe("mobile panel copy", () => {
     expect(js).toContain('setInterval(() => refresh(), 30000)');
     expect(js).not.toContain('setInterval(() => refresh(), 2000)');
   });
+
+  it("recovers after foreground resume without resending a task", () => {
+    const js = fs.readFileSync("public/app.js", "utf8");
+
+    expect(js).toContain('createLifecycleRecovery');
+    expect(js).toContain('lifecycleRecovery.start()');
+    expect(js).toContain('restartRealtime: () => realtime.restart()');
+  });
+
+  it("shows a jump-to-latest control without forcing history readers to the bottom", () => {
+    const html = fs.readFileSync("public/index.html", "utf8");
+    const js = fs.readFileSync("public/app.js", "utf8");
+    const css = fs.readFileSync("public/styles.css", "utf8");
+
+    expect(html).toContain('id="jump-to-latest"');
+    expect(js).toContain('markActiveConversationUnread');
+    expect(js).toContain('clearActiveConversationUnread');
+    expect(css).toContain('.jump-to-latest');
+  });
+
+  it("shows conversation state markers and a non-technical diagnostics section", () => {
+    const html = fs.readFileSync("public/index.html", "utf8");
+    const js = fs.readFileSync("public/app.js", "utf8");
+    const css = fs.readFileSync("public/styles.css", "utf8");
+
+    expect(html).toContain('id="diagnostics-summary"');
+    expect(html).toContain('id="export-diagnostics"');
+    expect(js).toContain('buildDiagnosticsSnapshot');
+    expect(js).toContain('formatSanitizedDiagnostics');
+    expect(js).toContain('getConversationStatusMarker');
+    expect(css).toContain('.conversation-status-marker');
+    expect(css).toContain('.diagnostics-grid');
+  });
 });

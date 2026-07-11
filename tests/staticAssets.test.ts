@@ -51,4 +51,16 @@ describe("static panel assets", () => {
 
     expect(response.headers["cache-control"]).toBe("no-store");
   });
+
+  it("prevents stale caches for lifecycle recovery logic", async () => {
+    const response = await request(createApp(config, new TaskStore())).get("/lifecycleRecovery.js").expect(200);
+
+    expect(response.headers["cache-control"]).toBe("no-store");
+  });
+
+  it("prevents stale caches for diagnostics logic", async () => {
+    const response = await request(createApp(config, new TaskStore())).get("/diagnostics.js").expect(200);
+
+    expect(response.headers["cache-control"]).toBe("no-store");
+  });
 });
