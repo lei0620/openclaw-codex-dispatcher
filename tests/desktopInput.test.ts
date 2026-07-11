@@ -66,6 +66,62 @@ describe("desktop input targeting", () => {
 });
 
 describe("desktop reply capture", () => {
+  it("does not treat an in-progress commentary message as the final desktop reply", () => {
+    const previousCodexHome = process.env.CODEX_HOME;
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-home-"));
+    process.env.CODEX_HOME = codexHome;
+    try {
+      const sessions = path.join(codexHome, "sessions", "2026", "07", "11");
+      fs.mkdirSync(sessions, { recursive: true });
+      const now = new Date().toISOString();
+      const lines = [
+        { type: "session_meta", timestamp: now, payload: { id: "expected-session" } },
+        { type: "event_msg", timestamp: now, payload: { type: "user_message", message: "测试" } },
+        { type: "event_msg", timestamp: now, payload: { type: "agent_message", phase: "commentary", message: "正在检查" } }
+      ];
+      fs.writeFileSync(
+        path.join(sessions, "rollout-in-progress.jsonl"),
+        `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`,
+        "utf8"
+      );
+
+      expect(findReplyAfterPrompt("测试", Date.now() - 2000, "expected-session")).toBeUndefined();
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      fs.rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
+
+  it("waits for the final desktop answer instead of returning an intermediate commentary update", () => {
+    const previousCodexHome = process.env.CODEX_HOME;
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-home-"));
+    process.env.CODEX_HOME = codexHome;
+    try {
+      const sessions = path.join(codexHome, "sessions", "2026", "07", "11");
+      fs.mkdirSync(sessions, { recursive: true });
+      const filePath = path.join(sessions, "rollout-final-answer.jsonl");
+      const now = new Date().toISOString();
+      const lines = [
+        { type: "session_meta", timestamp: now, payload: { id: "expected-session" } },
+        { type: "event_msg", timestamp: now, payload: { type: "user_message", message: "测试" } },
+        { type: "event_msg", timestamp: now, payload: { type: "agent_message", phase: "commentary", message: "正在检查" } },
+        { type: "event_msg", timestamp: now, payload: { type: "agent_message", phase: "final_answer", message: "最终完成" } },
+        { type: "event_msg", timestamp: now, payload: { type: "task_complete" } }
+      ];
+      fs.writeFileSync(filePath, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`, "utf8");
+
+      expect(findReplyAfterPrompt("测试", Date.now() - 2000, "expected-session")).toEqual({
+        sessionId: "expected-session",
+        text: "最终完成"
+      });
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      fs.rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
+
   it("only captures replies from the expected Codex session", () => {
     const previousCodexHome = process.env.CODEX_HOME;
     const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-home-"));

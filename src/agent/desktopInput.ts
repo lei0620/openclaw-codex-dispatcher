@@ -309,14 +309,20 @@ function extractAssistantText(item: Record<string, unknown>): string {
   if (item.type === "event_msg") {
     const payload = item.payload as { type?: unknown; message?: unknown; phase?: unknown } | undefined;
     if (payload?.type === "agent_message" && typeof payload.message === "string") {
+      if (payload.phase && payload.phase !== "final_answer") {
+        return "";
+      }
       return stripInternalMarkup(payload.message);
     }
   }
   if (item.type !== "response_item") {
     return "";
   }
-  const payload = item.payload as { type?: unknown; role?: unknown; content?: unknown } | undefined;
+  const payload = item.payload as { type?: unknown; role?: unknown; content?: unknown; phase?: unknown } | undefined;
   if (payload?.type !== "message" || payload.role !== "assistant") {
+    return "";
+  }
+  if (payload.phase && payload.phase !== "final_answer") {
     return "";
   }
   return stripInternalMarkup(extractContentText(payload.content, ["output_text", "text"]));
