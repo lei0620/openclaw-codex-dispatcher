@@ -12,8 +12,8 @@ import { deriveRecentProjects, deriveRunningConversations } from "/sidebarPriori
 const lanApiBase = "http://192.168.101.8:1314";
 const vpnApiBase = "http://100.69.253.5:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.9.6";
-const releaseNotes = "修复重复会话同步造成的消息延迟和界面抖动，合并流式输出刷新；检查更新遇到网络缓慢时会更快给出明确提示。";
+const appVersion = "1.9.7";
+const releaseNotes = "顶部统一为 Codex 并换用全新图标；侧栏优先显示正在执行和最近三个项目；修复有运行任务时聊天区被挤压。";
 let token = defaultDispatcherToken;
 let apiBase = defaultApiBase();
 
