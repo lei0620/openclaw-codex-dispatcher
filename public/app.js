@@ -8,12 +8,13 @@ import { createConnectionSettingsStore } from "/connectionSettings.js";
 import { buildApiBaseCandidates, isFailoverSafeRequest } from "/apiBaseFailover.js";
 import { createRealtimeRenderScheduler } from "/realtimeRenderScheduler.js";
 import { deriveRecentProjects, deriveRunningConversations } from "/sidebarPriority.js";
+import { createTaskStatusWatcher } from "/taskStatusWatcher.js";
 
 const lanApiBase = "http://192.168.101.8:1314";
 const vpnApiBase = "http://100.69.253.5:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.9.7";
-const releaseNotes = "顶部统一为 Codex 并换用全新图标；侧栏优先显示正在执行和最近三个项目；修复有运行任务时聊天区被挤压。";
+const appVersion = "1.9.8";
+const releaseNotes = "手机发送后立即刷新绑定的电脑 Codex 会话；为每条手机任务增加独立状态追踪，避免完成后仍停留在执行中。";
 let token = defaultDispatcherToken;
 let apiBase = defaultApiBase();
 
@@ -67,6 +68,14 @@ let knownPendingApprovalIds = new Set();
 let realtime;
 let lifecycleRecovery;
 const refresh = createRefreshGate(refreshNow);
+const taskStatusWatcher = createTaskStatusWatcher({
+  loadTask: async (taskId) => {
+    const payload = await api(`/api/tasks/${encodeURIComponent(taskId)}`);
+    return payload.task;
+  },
+  onTask: handleWatchedTask,
+  intervalMs: 1000
+});
 
 const modeLabels = {
   "dry-run": "只测试连接",
@@ -445,6 +454,9 @@ async function refreshNow() {
     state.approvals = approvals.approvals ?? [];
     state.codexWindows = windows.windows ?? [];
     state.activeTasks = await loadActiveSessionTasks();
+    for (const task of state.activeTasks) {
+      taskStatusWatcher.watch(task.id);
+    }
     ensureSelection();
     await loadActiveTasks();
     renderAll();
@@ -608,6 +620,7 @@ async function sendPendingRecord(pending) {
     throw new Error("NAS 没有返回任务，请重试。");
   }
   applyMobileEvent(state, createLocalTaskEvent(payload.task));
+  taskStatusWatcher.watch(payload.task.id);
   persistPendingSends();
   if (payload.task.conversationId && !pending.conversationId && !state.activeConversationId) {
     state.activeConversationId = payload.task.conversationId;
@@ -693,6 +706,20 @@ function createLocalTaskEvent(task) {
     occurredAt: task.updatedAt || new Date().toISOString(),
     payload: { task }
   };
+}
+
+function handleWatchedTask(task) {
+  applyMobileEvent(state, {
+    eventId: 0,
+    type: "task.updated",
+    taskId: task.id,
+    conversationId: task.conversationId,
+    occurredAt: task.updatedAt || new Date().toISOString(),
+    payload: { task }
+  });
+  updateConversationStatusFromTask(task);
+  persistPendingSends();
+  renderAll();
 }
 
 function persistPendingSends() {

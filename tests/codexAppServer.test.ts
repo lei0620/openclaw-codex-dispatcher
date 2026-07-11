@@ -69,6 +69,13 @@ describe("runCodexAppServerTask", () => {
     expect(script).not.toContain("-PromptFile");
   });
 
+  it("refreshes the bound desktop window when a phone turn starts and when it completes", () => {
+    const source = fs.readFileSync("src/agent/codexAppServer.ts", "utf8");
+
+    expect(source).toContain('await refreshDesktopForTurn(appServer, task, onLog, "started")');
+    expect(source).toContain('await refreshDesktopForTurn(appServer, task, onLog, "completed")');
+  });
+
   it("adds a bound window handle to the desktop refresh command", () => {
     const args = buildWindowsDesktopRefreshArgs("scripts/refresh-codex-desktop.ps1", "Codex|OpenAI", { handle: "123456" });
     const script = args.join(" ");

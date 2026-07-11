@@ -168,6 +168,7 @@ export async function runCodexAppServerTask(
       throw new Error("Codex app-server did not return a turn id");
     }
     onLog("system", `desktop app-server: started turn ${turnId}`);
+    await refreshDesktopForTurn(appServer, task, onLog, "started");
     const result = await withTurnTimeout(completed, appServer.turnTimeoutMs, () => {
       onLog("stderr", `desktop app-server turn timed out after ${appServer.turnTimeoutMs}ms\n`);
       if (activeThreadId && turnId) {
@@ -175,7 +176,7 @@ export async function runCodexAppServerTask(
       }
       ws.close();
     });
-    await refreshDesktopAfterTurn(appServer, task, onLog);
+    await refreshDesktopForTurn(appServer, task, onLog, "completed");
     return result;
   } finally {
     ws.close();
@@ -350,10 +351,11 @@ export function buildWindowsDesktopRefreshArgs(
   return args;
 }
 
-async function refreshDesktopAfterTurn(
+async function refreshDesktopForTurn(
   appServer: CodexAppServerConfig,
   task: TaskRecord,
-  onLog: (stream: TaskLogStream, text: string) => void
+  onLog: (stream: TaskLogStream, text: string) => void,
+  phase: "started" | "completed"
 ): Promise<void> {
   if (!appServer.refreshDesktopAfterTurn || process.platform !== "win32") {
     return;
@@ -361,7 +363,7 @@ async function refreshDesktopAfterTurn(
   try {
     await runDesktopRefreshScript(appServer, task, onLog);
   } catch (error) {
-    onLog("system", `desktop refresh failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    onLog("system", `desktop refresh after turn ${phase} failed: ${error instanceof Error ? error.message : String(error)}\n`);
   }
 }
 

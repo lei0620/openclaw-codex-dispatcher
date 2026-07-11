@@ -18,8 +18,8 @@ android {
         applicationId "com.aixm.openclawcodex"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 48
-        versionName "1.9.7"
+        versionCode 49
+        versionName "1.9.8"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField "String", "WEBDAV_UPDATE_ENDPOINT", quoteBuildConfig(webDavEndpoint)
         buildConfigField "String", "WEBDAV_UPDATE_USERNAME", quoteBuildConfig(webDavUsername)

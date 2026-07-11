@@ -31,6 +31,7 @@ describe("mobile conversation request isolation", () => {
       api: async () => ({ task: { id: "task-a", conversationId: "conversation-a" } }),
       applyMobileEvent: () => undefined,
       createLocalTaskEvent: () => ({}),
+      taskStatusWatcher: { watch: () => undefined },
       persistPendingSends: () => undefined,
       persistSelection: () => undefined,
       renderAll: () => undefined

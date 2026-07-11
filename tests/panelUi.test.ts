@@ -166,6 +166,15 @@ describe("mobile panel copy", () => {
     expect(js).not.toContain('setInterval(() => refresh(), 2000)');
   });
 
+  it("tracks each submitted task directly until the phone sees its final status", () => {
+    const js = fs.readFileSync("public/app.js", "utf8");
+
+    expect(js).toContain('from "/taskStatusWatcher.js"');
+    expect(js).toContain("createTaskStatusWatcher");
+    expect(js).toContain("taskStatusWatcher.watch(payload.task.id)");
+    expect(js).toContain("/api/tasks/${encodeURIComponent(taskId)}");
+  });
+
   it("batches streamed logs without delaying important realtime state changes", () => {
     const js = fs.readFileSync("public/app.js", "utf8");
 
