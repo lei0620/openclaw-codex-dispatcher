@@ -1,5 +1,6 @@
 package com.aixm.openclawcodex;
 
+import android.Manifest;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -9,14 +10,18 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
+import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
+import android.net.wifi.WifiManager;
 import android.provider.Settings;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
+import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.ContextCompat;
 
 import org.json.JSONObject;
@@ -34,6 +39,8 @@ public final class BackgroundRealtimeService extends Service {
     static final String PREFS = "openclaw_background_realtime";
     static final String KEY_ENABLED = "enabled";
     static final String KEY_LAST_EVENT_ID = "last_event_id";
+    static final String KEY_CONNECTION_STATE = "connection_state";
+    static final String KEY_LAST_CONNECTED_AT = "last_connected_at";
     static final int[] RECONNECT_DELAYS_MS = { 1000, 2000, 5000, 10000, 30000 };
 
     private static final String CONNECTION_CHANNEL = "codex_background_connection";
@@ -44,6 +51,8 @@ public final class BackgroundRealtimeService extends Service {
     private final Runnable reconnectRunnable = this::connect;
     private OkHttpClient client;
     private WebSocket socket;
+    private PowerManager.WakeLock wakeLock;
+    private WifiManager.WifiLock wifiLock;
     private int reconnectAttempt;
     private boolean stopping;
 
@@ -52,11 +61,32 @@ public final class BackgroundRealtimeService extends Service {
     }
 
     static void setEnabled(Context context, boolean enabled) {
-        preferences(context).edit().putBoolean(KEY_ENABLED, enabled).apply();
+        preferences(context).edit()
+                .putBoolean(KEY_ENABLED, enabled)
+                .putString(KEY_CONNECTION_STATE, enabled ? "connecting" : "disabled")
+                .apply();
+    }
+
+    static String getConnectionState(Context context) {
+        return preferences(context).getString(KEY_CONNECTION_STATE, isEnabled(context) ? "connecting" : "disabled");
+    }
+
+    static long getLastEventId(Context context) {
+        return preferences(context).getLong(KEY_LAST_EVENT_ID, -1L);
+    }
+
+    static long getLastConnectedAt(Context context) {
+        return preferences(context).getLong(KEY_LAST_CONNECTED_AT, 0L);
     }
 
     static void start(Context context) {
         ContextCompat.startForegroundService(context, new Intent(context, BackgroundRealtimeService.class));
+    }
+
+    static void startIfEnabled(Context context) {
+        if (isEnabled(context) && canShowNotifications(context)) {
+            start(context);
+        }
     }
 
     static void stop(Context context) {
@@ -64,7 +94,7 @@ public final class BackgroundRealtimeService extends Service {
     }
 
     static void refreshIfEnabled(Context context) {
-        if (!isEnabled(context)) {
+        if (!isEnabled(context) || !canShowNotifications(context)) {
             return;
         }
         Intent intent = new Intent(context, BackgroundRealtimeService.class).setAction(ACTION_REFRESH);
@@ -73,6 +103,14 @@ public final class BackgroundRealtimeService extends Service {
 
     private static SharedPreferences preferences(Context context) {
         return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    }
+
+    private static boolean canShowNotifications(Context context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            return false;
+        }
+        return NotificationManagerCompat.from(context).areNotificationsEnabled();
     }
 
     @Override
@@ -90,9 +128,11 @@ public final class BackgroundRealtimeService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         stopping = false;
         if (!isEnabled(this)) {
+            setConnectionState("disabled", false);
             stopSelf();
             return START_NOT_STICKY;
         }
+        acquireKeepAliveLocks();
         if (intent != null && ACTION_REFRESH.equals(intent.getAction())) {
             handler.removeCallbacks(reconnectRunnable);
             reconnectAttempt = 0;
@@ -124,7 +164,45 @@ public final class BackgroundRealtimeService extends Service {
             client.dispatcher().executorService().shutdown();
             client.connectionPool().evictAll();
         }
+        releaseKeepAliveLocks();
         super.onDestroy();
+    }
+
+    private void acquireKeepAliveLocks() {
+        PowerManager powerManager = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        if (wakeLock == null && powerManager != null) {
+            wakeLock = powerManager.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    "openclaw:background-realtime"
+            );
+            wakeLock.setReferenceCounted(false);
+        }
+        if (wakeLock != null && !wakeLock.isHeld()) {
+            wakeLock.acquire();
+        }
+
+        WifiManager wifiManager = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        if (wifiLock == null && wifiManager != null) {
+            wifiLock = wifiManager.createWifiLock(
+                    WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                    "openclaw:background-wifi"
+            );
+            wifiLock.setReferenceCounted(false);
+        }
+        if (wifiLock != null && !wifiLock.isHeld()) {
+            wifiLock.acquire();
+        }
+    }
+
+    private void releaseKeepAliveLocks() {
+        if (wifiLock != null && wifiLock.isHeld()) {
+            wifiLock.release();
+        }
+        wifiLock = null;
+        if (wakeLock != null && wakeLock.isHeld()) {
+            wakeLock.release();
+        }
+        wakeLock = null;
     }
 
     private void startAsForeground() {
@@ -156,13 +234,16 @@ public final class BackgroundRealtimeService extends Service {
         try {
             SecureConnectionStore.Settings settings = SecureConnectionStore.load(this);
             if (settings.token.trim().isEmpty() || settings.apiBase.trim().isEmpty()) {
+                setConnectionState("needs_settings", false);
                 scheduleReconnect();
                 return;
             }
             String url = websocketUrl(settings.apiBase);
             Request request = new Request.Builder().url(url).build();
+            setConnectionState("connecting", false);
             socket = client.newWebSocket(request, new Listener(settings));
         } catch (Exception ignored) {
+            setConnectionState("settings_error", false);
             socket = null;
             scheduleReconnect();
         }
@@ -178,6 +259,7 @@ public final class BackgroundRealtimeService extends Service {
         @Override
         public void onOpen(WebSocket webSocket, Response response) {
             reconnectAttempt = 0;
+            setConnectionState("authenticating", false);
             try {
                 JSONObject hello = new JSONObject()
                         .put("type", "client.hello")
@@ -190,7 +272,7 @@ public final class BackgroundRealtimeService extends Service {
                 if (cursor >= 0) {
                     hello.put("lastEventId", cursor);
                 }
-                socket.send(hello.toString());
+                webSocket.send(hello.toString());
             } catch (Exception ignored) {
                 webSocket.close(1002, "hello failed");
             }
@@ -203,11 +285,15 @@ public final class BackgroundRealtimeService extends Service {
 
         @Override
         public void onClosed(WebSocket webSocket, int code, String reason) {
+            if (!"authentication_failed".equals(getConnectionState(BackgroundRealtimeService.this)) && !stopping) {
+                setConnectionState("network_error", false);
+            }
             clearSocketAndReconnect(webSocket);
         }
 
         @Override
         public void onFailure(WebSocket webSocket, Throwable error, @Nullable Response response) {
+            setConnectionState("network_error", false);
             clearSocketAndReconnect(webSocket);
         }
     }
@@ -216,7 +302,17 @@ public final class BackgroundRealtimeService extends Service {
         try {
             JSONObject message = new JSONObject(text);
             String type = message.optString("type");
+            if ("client.accepted".equals(type)) {
+                setConnectionState("online", true);
+                return;
+            }
+            if ("error".equals(type)) {
+                setConnectionState("authentication_failed", false);
+                webSocket.close(1008, "authentication failed");
+                return;
+            }
             if ("sync.required".equals(type)) {
+                setConnectionState("online", true);
                 long latest = message.optLong("latestEventId", -1L);
                 saveCursor(latest);
                 notifyEvent(
@@ -234,6 +330,7 @@ public final class BackgroundRealtimeService extends Service {
                 return;
             }
             long eventId = event.optLong("eventId", -1L);
+            setConnectionState("online", false);
             processEvent(event);
             saveCursor(eventId);
             if (eventId >= 0) {
@@ -245,12 +342,20 @@ public final class BackgroundRealtimeService extends Service {
     }
 
     private void processEvent(JSONObject event) {
-        if (AppVisibility.isForeground()) {
-            return;
-        }
         String type = event.optString("type");
         JSONObject payload = event.optJSONObject("payload");
         if (payload == null) {
+            return;
+        }
+        if ("approval.resolved".equals(type)) {
+            JSONObject approval = payload.optJSONObject("approval");
+            if (approval != null) {
+                NotificationManager manager = getSystemService(NotificationManager.class);
+                manager.cancel(notificationId("approval:" + approval.optString("id")));
+            }
+            return;
+        }
+        if (AppVisibility.isForeground(this)) {
             return;
         }
         if ("approval.requested".equals(type)) {
@@ -297,11 +402,22 @@ public final class BackgroundRealtimeService extends Service {
         preferences(this).edit().putLong(KEY_LAST_EVENT_ID, eventId).apply();
     }
 
+    private void setConnectionState(String state, boolean connectedNow) {
+        SharedPreferences.Editor editor = preferences(this).edit().putString(KEY_CONNECTION_STATE, state);
+        if (connectedNow) {
+            editor.putLong(KEY_LAST_CONNECTED_AT, System.currentTimeMillis());
+        }
+        editor.apply();
+    }
+
     private void clearSocketAndReconnect(WebSocket closedSocket) {
         if (socket != closedSocket) {
             return;
         }
         socket = null;
+        if ("authentication_failed".equals(getConnectionState(this))) {
+            return;
+        }
         scheduleReconnect();
     }
 
@@ -316,7 +432,7 @@ public final class BackgroundRealtimeService extends Service {
     }
 
     private void notifyEvent(int notificationId, String title, String text) {
-        if (AppVisibility.isForeground()) {
+        if (AppVisibility.isForeground(this)) {
             return;
         }
         Notification notification = new NotificationCompat.Builder(this, EVENT_CHANNEL)

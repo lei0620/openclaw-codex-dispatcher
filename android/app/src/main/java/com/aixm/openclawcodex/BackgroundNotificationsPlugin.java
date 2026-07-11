@@ -72,6 +72,9 @@ public final class BackgroundNotificationsPlugin extends Plugin {
         JSObject result = new JSObject();
         result.put("enabled", BackgroundRealtimeService.isEnabled(getContext()));
         result.put("permission", permissionName());
+        result.put("connectionState", BackgroundRealtimeService.getConnectionState(getContext()));
+        result.put("lastEventId", BackgroundRealtimeService.getLastEventId(getContext()));
+        result.put("lastConnectedAt", BackgroundRealtimeService.getLastConnectedAt(getContext()));
         return result;
     }
 

@@ -8,8 +8,8 @@ import { createConnectionSettingsStore } from "/connectionSettings.js";
 
 const lanApiBase = "http://192.168.101.8:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.9.0";
-const releaseNotes = "新增锁屏和后台权限提醒、任务完成通知；可在设置中随时开启或关闭。";
+const appVersion = "1.9.1";
+const releaseNotes = "修复后台提醒服务被系统停止后，重新打开 App 没有自动恢复连接的问题。";
 let token = defaultDispatcherToken;
 let apiBase = defaultApiBase();
 
@@ -285,6 +285,23 @@ function renderBackgroundNotificationStatus(result = {}) {
   els.backgroundNotifications.checked = enabled;
   if (result.permission === "denied") {
     els.backgroundNotificationsStatus.textContent = "系统通知权限未开启，请在手机系统设置中允许通知。";
+    return;
+  }
+  if (enabled && result.connectionState === "online") {
+    const eventText = Number(result.lastEventId) >= 0 ? `，事件 ${result.lastEventId}` : "";
+    els.backgroundNotificationsStatus.textContent = `已开启，后台连接已恢复${eventText}。`;
+    return;
+  }
+  if (enabled && result.connectionState === "authentication_failed") {
+    els.backgroundNotificationsStatus.textContent = "已开启，但访问密码校验失败。请重新保存访问密码。";
+    return;
+  }
+  if (enabled && ["needs_settings", "settings_error"].includes(result.connectionState)) {
+    els.backgroundNotificationsStatus.textContent = "已开启，但无法读取连接设置。请重新保存服务地址和访问密码。";
+    return;
+  }
+  if (enabled && ["connecting", "authenticating", "network_error"].includes(result.connectionState)) {
+    els.backgroundNotificationsStatus.textContent = "已开启，正在连接 NAS；断线后会自动重试。";
     return;
   }
   els.backgroundNotificationsStatus.textContent = enabled
@@ -2004,6 +2021,7 @@ function openSettings() {
   closeWindowPicker();
   els.settingsPanel.hidden = false;
   els.settingsScrim.hidden = false;
+  void initBackgroundNotifications();
 }
 
 function closeSettings() {

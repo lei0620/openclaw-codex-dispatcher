@@ -21,6 +21,7 @@ public class MainActivity extends BridgeActivity {
     public void onStart() {
         super.onStart();
         AppVisibility.setForeground(true);
+        BackgroundRealtimeService.startIfEnabled(this);
     }
 
     @Override

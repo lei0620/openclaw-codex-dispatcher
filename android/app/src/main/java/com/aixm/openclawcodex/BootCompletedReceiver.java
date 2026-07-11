@@ -12,7 +12,7 @@ public final class BootCompletedReceiver extends BroadcastReceiver {
             return;
         }
         if (BackgroundRealtimeService.isEnabled(context)) {
-            BackgroundRealtimeService.start(context);
+            BackgroundRealtimeService.startIfEnabled(context);
         }
     }
 }

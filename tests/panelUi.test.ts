@@ -184,6 +184,7 @@ describe("mobile panel copy", () => {
     expect(html).toContain('id="background-notifications"');
     expect(html).toContain('id="background-notifications-status"');
     expect(html).toContain("锁屏和切到后台后继续接收");
+    expect(html).toContain("会略微增加耗电");
     expect(js).toContain("getBackgroundNotificationsPlugin");
     expect(js).toContain("window.Capacitor?.isNativePlatform?.()");
     expect(js).toContain('window.Capacitor?.getPlatform?.() === "android"');
@@ -192,6 +193,8 @@ describe("mobile panel copy", () => {
     expect(js).toContain("await plugin.enable()");
     expect(js).toContain("await plugin.disable()");
     expect(js).toContain("els.backgroundNotificationsSection.hidden = false");
+    expect(js).toContain("result.connectionState");
+    expect(js).toContain("后台连接已恢复");
     expect(js).not.toContain("Notification.requestPermission");
   });
 });
