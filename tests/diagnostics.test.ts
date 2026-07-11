@@ -35,7 +35,7 @@ describe("mobile diagnostics", () => {
       apiBase: "http://192.168.101.8:1314",
       token: "plain-token-value",
       nested: { password: "plain-password", secret: "plain-secret" },
-      latestError: "Authorization: Bearer secret-token password=hello webdav=kmtfs84y token=397b6987fc3424c5b44326f372ad79c1536edd5eec6c62bc53b9358cb9a76b01"
+      latestError: "Authorization: Bearer secret-token password=hello webdav=fake-webdav-token token=397b6987fc3424c5b44326f372ad79c1536edd5eec6c62bc53b9358cb9a76b01"
     });
 
     expect(report).toContain("http://192.168.101.8:1314");
@@ -44,7 +44,7 @@ describe("mobile diagnostics", () => {
     expect(report).not.toContain("plain-password");
     expect(report).not.toContain("plain-secret");
     expect(report).not.toContain("hello");
-    expect(report).not.toContain("kmtfs84y");
+    expect(report).not.toContain("fake-webdav-token");
     expect(report).not.toContain("397b6987");
     expect(report).toContain("[已隐藏]");
   });

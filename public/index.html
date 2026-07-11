@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>手机遥控 Codex</title>
-    <link rel="stylesheet" href="/styles.css?v=1.8.0" />
+    <link rel="stylesheet" href="/styles.css?v=1.9.0" />
   </head>
   <body>
     <div id="sidebar-scrim" class="sidebar-scrim" hidden></div>
@@ -115,6 +115,15 @@
         </div>
       </section>
 
+      <section id="background-notifications-section" class="settings-section" hidden>
+        <h3>后台提醒</h3>
+        <label class="settings-toggle">
+          <span>锁屏和切到后台后继续接收权限与任务结果</span>
+          <input id="background-notifications" type="checkbox" />
+        </label>
+        <p id="background-notifications-status" class="settings-hint">正在读取状态...</p>
+      </section>
+
       <section class="settings-section">
         <h3>任务</h3>
         <label>
@@ -157,6 +166,6 @@
         <p id="update-status" class="update-status" hidden></p>
       </section>
     </aside>
-    <script type="module" src="/app.js?v=1.8.0"></script>
+    <script type="module" src="/app.js?v=1.9.0"></script>
   </body>
 </html>

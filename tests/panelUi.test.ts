@@ -175,4 +175,23 @@ describe("mobile panel copy", () => {
     expect(js).not.toContain('localStorage.getItem("openclawApiBase")');
     expect(js).not.toContain('localStorage.setItem("openclawApiBase"');
   });
+
+  it("shows a native-only background notification toggle without prompting browsers", () => {
+    const html = fs.readFileSync("public/index.html", "utf8");
+    const js = fs.readFileSync("public/app.js", "utf8");
+
+    expect(html).toContain('id="background-notifications-section"');
+    expect(html).toContain('id="background-notifications"');
+    expect(html).toContain('id="background-notifications-status"');
+    expect(html).toContain("锁屏和切到后台后继续接收");
+    expect(js).toContain("getBackgroundNotificationsPlugin");
+    expect(js).toContain("window.Capacitor?.isNativePlatform?.()");
+    expect(js).toContain('window.Capacitor?.getPlatform?.() === "android"');
+    expect(js).toContain("initBackgroundNotifications");
+    expect(js).toContain("await plugin.status()");
+    expect(js).toContain("await plugin.enable()");
+    expect(js).toContain("await plugin.disable()");
+    expect(js).toContain("els.backgroundNotificationsSection.hidden = false");
+    expect(js).not.toContain("Notification.requestPermission");
+  });
 });

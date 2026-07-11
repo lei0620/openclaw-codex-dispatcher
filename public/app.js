@@ -8,8 +8,8 @@ import { createConnectionSettingsStore } from "/connectionSettings.js";
 
 const lanApiBase = "http://192.168.101.8:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.8.0";
-const releaseNotes = "NAS 服务地址和访问密码改用 Android Keystore 加密保存；升级后自动迁移旧设置，无需重新输入。";
+const appVersion = "1.9.0";
+const releaseNotes = "新增锁屏和后台权限提醒、任务完成通知；可在设置中随时开启或关闭。";
 let token = defaultDispatcherToken;
 let apiBase = defaultApiBase();
 
@@ -136,6 +136,9 @@ const els = {
   settingsOpen: document.querySelector("#settings-open"),
   settingsClose: document.querySelector("#settings-close"),
   settingsScrim: document.querySelector("#settings-scrim"),
+  backgroundNotificationsSection: document.querySelector("#background-notifications-section"),
+  backgroundNotifications: document.querySelector("#background-notifications"),
+  backgroundNotificationsStatus: document.querySelector("#background-notifications-status"),
   autoFollowConversation: document.querySelector("#auto-follow-conversation"),
   diagnosticsSummary: document.querySelector("#diagnostics-summary"),
   exportDiagnostics: document.querySelector("#export-diagnostics"),
@@ -185,6 +188,7 @@ els.currentWindowToggle.addEventListener("click", toggleWindowPicker);
 els.settingsOpen.addEventListener("click", openSettings);
 els.settingsClose.addEventListener("click", closeSettings);
 els.settingsScrim.addEventListener("click", closeSettings);
+els.backgroundNotifications?.addEventListener("change", changeBackgroundNotifications);
 els.jumpToLatest.addEventListener("click", jumpToLatestMessage);
 els.exportDiagnostics.addEventListener("click", exportDiagnostics);
 els.messages.addEventListener("scroll", () => {
@@ -194,6 +198,7 @@ els.messages.addEventListener("scroll", () => {
 });
 
 initAndroidUpdateControls();
+await initBackgroundNotifications();
 renderAppVersion();
 await refresh();
 realtime = createRealtimeClient({
@@ -224,6 +229,67 @@ function getDispatcherHttp() {
 
 function getSecureConnectionPlugin() {
   return window.Capacitor?.Plugins?.SecureConnection;
+}
+
+function getBackgroundNotificationsPlugin() {
+  const isNativeAndroid = window.Capacitor?.isNativePlatform?.() &&
+    window.Capacitor?.getPlatform?.() === "android";
+  if (!isNativeAndroid) {
+    return undefined;
+  }
+  return window.Capacitor?.Plugins?.BackgroundNotifications;
+}
+
+async function initBackgroundNotifications() {
+  const plugin = getBackgroundNotificationsPlugin();
+  if (!plugin || !els.backgroundNotificationsSection) {
+    return;
+  }
+  els.backgroundNotificationsSection.hidden = false;
+  try {
+    renderBackgroundNotificationStatus(await plugin.status());
+  } catch (error) {
+    els.backgroundNotifications.disabled = true;
+    els.backgroundNotificationsStatus.textContent = `无法读取后台提醒状态：${error?.message || error}`;
+  }
+}
+
+async function changeBackgroundNotifications() {
+  const plugin = getBackgroundNotificationsPlugin();
+  if (!plugin) {
+    return;
+  }
+  els.backgroundNotifications.disabled = true;
+  els.backgroundNotificationsStatus.textContent = els.backgroundNotifications.checked
+    ? "正在开启后台提醒..."
+    : "正在关闭后台提醒...";
+  try {
+    const result = els.backgroundNotifications.checked
+      ? await plugin.enable()
+      : await plugin.disable();
+    renderBackgroundNotificationStatus(result);
+  } catch (error) {
+    els.backgroundNotificationsStatus.textContent = error?.message || "后台提醒设置失败，请稍后重试。";
+    try {
+      renderBackgroundNotificationStatus(await plugin.status());
+    } catch {
+      els.backgroundNotifications.checked = false;
+    }
+  } finally {
+    els.backgroundNotifications.disabled = false;
+  }
+}
+
+function renderBackgroundNotificationStatus(result = {}) {
+  const enabled = Boolean(result.enabled) && result.permission === "granted";
+  els.backgroundNotifications.checked = enabled;
+  if (result.permission === "denied") {
+    els.backgroundNotificationsStatus.textContent = "系统通知权限未开启，请在手机系统设置中允许通知。";
+    return;
+  }
+  els.backgroundNotificationsStatus.textContent = enabled
+    ? "已开启。App 不在前台时会提醒等待授权、完成和失败。"
+    : "已关闭。只有打开 App 时才能及时看到新状态。";
 }
 
 function defaultApiBase() {

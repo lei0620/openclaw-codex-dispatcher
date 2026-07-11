@@ -12,8 +12,21 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(AndroidUpdaterPlugin.class);
         registerPlugin(DispatcherHttpPlugin.class);
         registerPlugin(SecureConnectionPlugin.class);
+        registerPlugin(BackgroundNotificationsPlugin.class);
         super.onCreate(savedInstanceState);
         installBackGestureGuard();
+    }
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        AppVisibility.setForeground(true);
+    }
+
+    @Override
+    public void onStop() {
+        AppVisibility.setForeground(false);
+        super.onStop();
     }
 
     private void installBackGestureGuard() {

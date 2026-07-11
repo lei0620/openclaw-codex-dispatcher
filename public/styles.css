@@ -885,6 +885,11 @@ p {
   gap: 10px;
 }
 
+.settings-toggle input[type="checkbox"]:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
 .settings-hint {
   color: var(--muted);
   font-size: 13px;
