@@ -5,7 +5,9 @@ export function createRealtimeClient(options) {
   const random = options.random ?? Math.random;
   let socket;
   let reconnectTimer;
+  let connectionTimer;
   let reconnectAttempt = 0;
+  let apiBaseIndex = 0;
   let stopped = true;
   let processing = Promise.resolve();
 
@@ -18,7 +20,9 @@ export function createRealtimeClient(options) {
   function stop() {
     stopped = true;
     if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (connectionTimer) clearTimeout(connectionTimer);
     reconnectTimer = undefined;
+    connectionTimer = undefined;
     if (socket) {
       const current = socket;
       socket = undefined;
@@ -30,6 +34,8 @@ export function createRealtimeClient(options) {
 
   function restart() {
     stop();
+    reconnectAttempt = 0;
+    apiBaseIndex = 0;
     start();
   }
 
@@ -39,35 +45,65 @@ export function createRealtimeClient(options) {
 
   function connect() {
     if (stopped) return;
-    const apiBase = String(options.getApiBase() ?? "").replace(/\/$/, "");
+    const apiBases = getApiBases();
+    const apiBase = apiBases[apiBaseIndex % Math.max(apiBases.length, 1)] ?? "";
     const token = String(options.getToken() ?? "");
     if (!apiBase || !token || !WebSocketImpl) {
       setState("stopped");
       return;
     }
     setState(reconnectAttempt > 0 ? "reconnecting" : "connecting");
-    socket = new WebSocketImpl(toWebSocketUrl(apiBase));
-    socket.onopen = () => {
+    const current = new WebSocketImpl(toWebSocketUrl(apiBase));
+    socket = current;
+    connectionTimer = setTimeout(() => {
+      if (socket !== current || current.readyState === WebSocketImpl.OPEN) return;
+      current.onclose = undefined;
+      socket = undefined;
+      current.close();
+      advanceApiBase(apiBases.length);
+      scheduleReconnect();
+    }, options.connectionTimeoutMs ?? 5000);
+    current.onopen = () => {
+      clearConnectionTimer();
       const lastEventId = options.getLastEventId();
-      socket.send(JSON.stringify({
+      current.send(JSON.stringify({
         type: "client.hello",
         token,
         clientId: options.clientId,
         ...(Number.isInteger(lastEventId) && lastEventId >= 0 ? { lastEventId } : {})
       }));
     };
-    socket.onmessage = (message) => {
+    current.onmessage = (message) => {
       processing = processing
         .then(() => handleMessage(JSON.parse(String(message.data))))
         .catch(() => {
-          socket?.close();
+          current.close();
         });
     };
-    socket.onerror = () => undefined;
-    socket.onclose = () => {
+    current.onerror = () => undefined;
+    current.onclose = () => {
+      if (socket !== current) return;
+      clearConnectionTimer();
       socket = undefined;
-      if (!stopped) scheduleReconnect();
+      if (!stopped) {
+        advanceApiBase(apiBases.length);
+        scheduleReconnect();
+      }
     };
+  }
+
+  function getApiBases() {
+    const configured = options.getApiBases?.() ?? [options.getApiBase?.()];
+    return [...new Set(configured.map((value) => String(value ?? "").replace(/\/$/, "")).filter(Boolean))];
+  }
+
+  function advanceApiBase(length) {
+    if (length > 1) apiBaseIndex = (apiBaseIndex + 1) % length;
+  }
+
+  function clearConnectionTimer() {
+    if (connectionTimer) clearTimeout(connectionTimer);
+    connectionTimer = undefined;
   }
 
   async function handleMessage(message) {

@@ -242,9 +242,18 @@ describe("mobile panel copy", () => {
 
     expect(js).toContain('const vpnApiBase = "http://100.69.253.5:1314"');
     expect(js).toContain("buildApiBaseCandidates(apiBase, [lanApiBase, vpnApiBase])");
+    expect(js).toContain("getApiBases: () => buildApiBaseCandidates(apiBase, [lanApiBase, vpnApiBase])");
     expect(js).toContain("isFailoverSafeRequest(url, options)");
     expect(js).toContain("rememberWorkingApiBase(candidate)");
     expect(js).not.toContain('value === "http://100.69.253.5:1314" ||');
+  });
+
+  it("uses a short refresh safety net only while realtime is offline", () => {
+    const js = fs.readFileSync("public/app.js", "utf8");
+
+    expect(js).toContain('if (state.realtimeState !== "online")');
+    expect(js).toContain('}, 5000);');
+    expect(js).toContain('setInterval(() => refresh(), 30000)');
   });
 
   it("loads Android connection credentials from Keystore before the first refresh", () => {

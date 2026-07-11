@@ -94,6 +94,35 @@ describe("createRealtimeClient", () => {
     expect(FakeWebSocket.instances).toHaveLength(2);
     expect(states).toContain("reconnecting");
   });
+
+  it("rotates to the next NAS address when the realtime connection drops", async () => {
+    vi.useFakeTimers();
+    const client = createClient({
+      getApiBases: () => ["http://vpn-nas:1314", "http://lan-nas:1314"]
+    });
+    client.start();
+
+    expect(FakeWebSocket.instances[0].url).toBe("ws://vpn-nas:1314/events");
+    FakeWebSocket.instances[0].closeFromServer();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(FakeWebSocket.instances[1].url).toBe("ws://lan-nas:1314/events");
+  });
+
+  it("abandons a NAS address that never opens and tries the next one", async () => {
+    vi.useFakeTimers();
+    const client = createClient({
+      getApiBases: () => ["http://vpn-nas:1314", "http://lan-nas:1314"],
+      connectionTimeoutMs: 3000
+    });
+    client.start();
+
+    await vi.advanceTimersByTimeAsync(3999);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(FakeWebSocket.instances[1].url).toBe("ws://lan-nas:1314/events");
+  });
 });
 
 function createClient(overrides: Record<string, unknown> = {}) {

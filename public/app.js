@@ -14,8 +14,8 @@ import { groupConversationMessages } from "/conversationPresentation.js";
 const lanApiBase = "http://192.168.101.8:1314";
 const vpnApiBase = "http://100.69.253.5:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.9.9";
-const releaseNotes = "手机聊天与桌面端一致：处理过程默认折叠，最终答案单独显示；未完成时仍可展开查看实时进度。";
+const appVersion = "1.9.10";
+const releaseNotes = "提升实时消息稳定性：局域网与 VPN 自动切换，连接异常时 5 秒内自动补齐，不再依赖手动刷新。";
 let token = defaultDispatcherToken;
 let apiBase = defaultApiBase();
 
@@ -220,6 +220,7 @@ await refresh();
 realtime = createRealtimeClient({
   clientId: realtimeClientId,
   getApiBase: () => apiBase,
+  getApiBases: () => buildApiBaseCandidates(apiBase, [lanApiBase, vpnApiBase]),
   getToken: () => token,
   getLastEventId: getRealtimeCursor,
   setLastEventId: setRealtimeCursor,
@@ -233,6 +234,11 @@ lifecycleRecovery = createLifecycleRecovery({
   reconcile: () => refresh()
 });
 lifecycleRecovery.start();
+setInterval(() => {
+  if (state.realtimeState !== "online") {
+    void refresh();
+  }
+}, 5000);
 setInterval(() => refresh(), 30000);
 
 function getAndroidUpdater() {
