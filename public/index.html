@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>手机遥控 Codex</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=1.5.0" />
   </head>
   <body>
     <div id="sidebar-scrim" class="sidebar-scrim" hidden></div>
@@ -36,9 +36,18 @@
             </div>
           </div>
           <div class="connection">
-            <span id="status-icon" class="computer-status pending" role="img" aria-label="正在连接" title="正在连接">
+            <button id="current-window-toggle" class="window-switcher-toggle" type="button" aria-label="切换绑定的 Codex 窗口" aria-expanded="false">
+              <span class="window-switcher-dot" aria-hidden="true"></span>
+              <span id="current-window-label">窗口</span>
+            </button>
+            <button id="status-icon" class="connection-status computer-status recovering" type="button" aria-label="正在连接" title="正在连接" aria-expanded="false">
               <span class="computer-mark" aria-hidden="true"></span>
-            </span>
+            </button>
+            <div id="connection-details" class="connection-details" hidden>
+              <div><span>NAS</span><strong id="nas-status">检查中</strong></div>
+              <div><span>电脑</span><strong id="agent-status">检查中</strong></div>
+              <div><span>Codex</span><strong id="codex-status">检查中</strong></div>
+            </div>
             <button id="sync-conversations" class="icon-button sync-open" type="button" aria-label="同步电脑 Codex 对话" title="同步电脑 Codex 对话">
               <span class="sync-mark" aria-hidden="true"></span>
             </button>
@@ -51,20 +60,20 @@
             </button>
           </div>
         </header>
+        <div id="window-picker" class="window-picker" hidden></div>
         <div id="approval-inbox" class="approval-inbox" aria-live="polite" hidden></div>
         <div id="active-sessions" class="active-sessions" aria-label="正在执行的会话" hidden></div>
 
         <section class="chat-panel" aria-label="Codex 对话">
           <div id="messages" class="messages" aria-live="polite"></div>
+          <p id="submit-error" class="submit-error" role="alert" hidden></p>
           <form id="chat-form" class="chat-form">
             <textarea
               id="prompt"
-              rows="3"
-              placeholder="直接输入给 Codex 的话，比如：帮我检查这个项目怎么启动"
+              rows="1"
+              placeholder="直接输入给 Codex..."
             ></textarea>
-            <div class="chat-actions">
-              <button id="submit" type="submit">发送给 Codex</button>
-            </div>
+            <button id="submit" class="send-button" type="submit">发送</button>
           </form>
         </section>
       </section>
@@ -111,6 +120,11 @@
           执行方式
           <select id="mode"></select>
         </label>
+        <label>
+          绑定 Codex 窗口
+          <select id="refresh-window-binding"></select>
+        </label>
+        <p id="refresh-window-help" class="settings-hint">绑定后，这个会话完成时只刷新指定的电脑 Codex 窗口。</p>
         <label class="settings-toggle">
           <span>自动切到桌面最新对话（与最新会话保持同步）</span>
           <input id="auto-follow-conversation" type="checkbox" checked />
@@ -133,6 +147,6 @@
         <p id="update-status" class="update-status" hidden></p>
       </section>
     </aside>
-    <script src="/app.js" type="module"></script>
+    <script type="module" src="/app.js?v=1.5.0"></script>
   </body>
 </html>

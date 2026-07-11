@@ -75,6 +75,27 @@ $config = [ordered]@{
     args = @($CodexBin, "exec", "--skip-git-repo-check", "--cd", "{{projectPath}}", "{{prompt}}")
     promptStdin = $false
   }
+  codexAppServer = [ordered]@{
+    enabled = $true
+    url = "ws://127.0.0.1:18765"
+    startupTimeoutMs = 60000
+    requestTimeoutMs = 30000
+    turnTimeoutMs = 120000
+    supervisorIntervalMs = 5000
+    heartbeatIntervalMs = 10000
+    refreshDesktopAfterTurn = $true
+    refreshScriptPath = "scripts/refresh-codex-desktop.ps1"
+    refreshWindowTitlePattern = "Codex|OpenAI|ChatGPT"
+    refreshTimeoutMs = 8000
+  }
+  desktopInput = [ordered]@{
+    enabled = $false
+    allowUnsafeForegroundRouting = $false
+    scriptPath = "scripts/send-codex-desktop-input.ps1"
+    clickYOffset = 92
+    windowTitlePattern = "Codex|OpenAI|ChatGPT"
+    responseTimeoutMs = 180000
+  }
 }
 
 $config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $ConfigPath -Encoding UTF8

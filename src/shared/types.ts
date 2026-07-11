@@ -36,6 +36,23 @@ export interface CodexAppServerConfig {
   command?: string;
   startupTimeoutMs: number;
   requestTimeoutMs: number;
+  turnTimeoutMs: number;
+  supervisorIntervalMs?: number;
+  heartbeatIntervalMs?: number;
+  refreshDesktopAfterTurn?: boolean;
+  refreshScriptPath?: string;
+  refreshWindowTitlePattern?: string;
+  refreshTimeoutMs?: number;
+}
+
+export type CodexServicePhase = "disabled" | "starting" | "ready" | "recovering" | "error";
+
+export interface CodexServiceStatus {
+  phase: CodexServicePhase;
+  ready: boolean;
+  checkedAt: string;
+  endpoint: string;
+  error?: string;
 }
 
 export interface DesktopInputConfig {
@@ -92,6 +109,7 @@ export interface TaskRecord {
   projectId: string;
   conversationId?: string;
   codexSessionId?: string;
+  refreshWindowId?: string;
   prompt: string;
   mode: string;
   source: TaskSource;
@@ -116,6 +134,7 @@ export interface ConversationRecord {
   updatedAt: string;
   source?: "panel" | "codex";
   codexSessionId?: string;
+  refreshWindowId?: string;
   messages?: ConversationMessage[];
 }
 
@@ -151,12 +170,26 @@ export interface AgentRecord {
   online: boolean;
   connectedAt: string;
   lastSeenAt: string;
+  codex?: CodexServiceStatus;
+}
+
+export interface CodexDesktopWindow {
+  id: string;
+  agentId: string;
+  handle: string;
+  processId: number;
+  title: string;
+  remark?: string;
+  startedAt?: string;
+  updatedAt: string;
 }
 
 export type AgentClientMessage =
   | { type: "agent.hello"; agentId: string; token: string }
+  | { type: "agent.heartbeat"; sentAt: string; codex: CodexServiceStatus }
   | { type: "agent.projects"; projects: ProjectConfig[] }
   | { type: "agent.codexConversations"; conversations: SyncedCodexConversation[] }
+  | { type: "agent.codexWindows"; windows: CodexDesktopWindow[] }
   | { type: "task.approval.requested"; approval: ApprovalRecord }
   | { type: "task.log"; taskId: string; stream: TaskLogStream; text: string }
   | { type: "task.result"; taskId: string; result: TaskResult }

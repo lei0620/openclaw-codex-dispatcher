@@ -20,7 +20,15 @@ export function createApp(config: DispatcherConfig, store: TaskStore): express.E
     next();
   });
   app.use(express.json({ limit: "1mb" }));
-  app.use(express.static(path.resolve(dirname, "../../public")));
+  app.use(
+    express.static(path.resolve(dirname, "../../public"), {
+      setHeaders(res, filePath) {
+        if (/\.(?:html|js|css)$/.test(filePath)) {
+          res.setHeader("Cache-Control", "no-store");
+        }
+      }
+    })
+  );
   app.use("/api", createApiRouter({ config, store }));
   return app;
 }

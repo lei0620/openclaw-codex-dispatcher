@@ -49,6 +49,17 @@ describe("mobile panel copy", () => {
     expect(css).toContain(".active-session-card");
   });
 
+  it("lets users add readable remarks to Codex desktop windows", () => {
+    const js = fs.readFileSync("public/app.js", "utf8");
+    const css = fs.readFileSync("public/styles.css", "utf8");
+
+    expect(js).toContain("/api/codex-windows/remark");
+    expect(js).toContain("给这个 Codex 窗口写个备注");
+    expect(js).toContain("window-picker-subtitle");
+    expect(js).toContain("renameCodexWindow");
+    expect(css).toContain(".window-picker-subtitle");
+  });
+
   it("separates Codex answers from task status details", () => {
     const js = fs.readFileSync("public/app.js", "utf8");
     const css = fs.readFileSync("public/styles.css", "utf8");
@@ -61,5 +72,51 @@ describe("mobile panel copy", () => {
     expect(css).toContain(".answer-text");
     expect(css).toContain(".task-status-line");
     expect(css).toContain(".task-details");
+  });
+
+  it("renders phone user messages as compact desktop-style grey bubbles", () => {
+    const css = fs.readFileSync("public/styles.css", "utf8");
+
+    expect(css).toContain(".user-message .bubble");
+    expect(css).toContain("background: #f4f4f5");
+    expect(css).toContain("width: fit-content");
+    expect(css).toContain("max-width: min(88%, 720px)");
+    expect(css).toContain("border-radius: 18px");
+  });
+
+  it("cache-busts panel assets so mobile WebView loads the latest fixes", () => {
+    const html = fs.readFileSync("public/index.html", "utf8");
+
+    expect(html).toContain('/styles.css?v=');
+    expect(html).toContain('/app.js?v=');
+  });
+
+  it("shows a clear send error when a conversation needs a window binding", () => {
+    const html = fs.readFileSync("public/index.html", "utf8");
+    const js = fs.readFileSync("public/app.js", "utf8");
+    const css = fs.readFileSync("public/styles.css", "utf8");
+
+    expect(html).toContain("submit-error");
+    expect(js).toContain("setSubmitError");
+    expect(js).toContain("先给这个对话绑定一个电脑窗口");
+    expect(css).toContain(".submit-error");
+  });
+
+  it("shows separate NAS, computer, and Codex connection details", () => {
+    const html = fs.readFileSync("public/index.html", "utf8");
+    const js = fs.readFileSync("public/app.js", "utf8");
+
+    expect(html).toContain("connection-details");
+    expect(html).toContain("NAS");
+    expect(html).toContain("电脑");
+    expect(html).toContain("Codex");
+    expect(js).toContain("deriveConnectionStatus");
+    expect(js).not.toContain('return "离线"');
+  });
+
+  it("disables Capacitor bridge logging so request credentials are not written to logcat", () => {
+    const config = fs.readFileSync("capacitor.config.ts", "utf8");
+
+    expect(config).toContain('loggingBehavior: "none"');
   });
 });

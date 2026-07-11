@@ -16,7 +16,7 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 function Test-CodexRunning {
   @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
-    $_.ProcessName -ieq "Codex" -or $_.ProcessName -ieq "codex"
+    $_.Path -and $_.Path -match "\\OpenAI\.Codex_[^\\]+\\app\\(ChatGPT|Codex)\.exe$"
   }).Count -gt 0
 }
 

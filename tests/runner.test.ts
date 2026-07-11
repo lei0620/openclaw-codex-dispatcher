@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildCodexSpawn, detectApprovalPrompt, selectCodexExecutionPlan, runCodexTask } from "../src/agent/runner.js";
 import type { ProjectConfig, TaskRecord } from "../src/shared/types.js";
 
@@ -85,12 +85,16 @@ describe("buildCodexSpawn", () => {
     expect(detectApprovalPrompt("ordinary task output")).toBeUndefined();
   });
 
-  it("prefers the session-aware app-server over foreground desktop input", () => {
-    const task = createRunnerTask({ source: "panel", codexSessionId: "019ea06b-17d8-7a32-8106-334d3ae55286" });
+  it("uses app-server for synced Codex conversations even when a desktop window is bound", () => {
+    const task = createRunnerTask({
+      source: "panel",
+      codexSessionId: "019ea06b-17d8-7a32-8106-334d3ae55286",
+      refreshWindowId: "LEI-PC:pid:24228"
+    });
 
     expect(
       selectCodexExecutionPlan(
-        { enabled: true, url: "ws://127.0.0.1:18765", startupTimeoutMs: 8000, requestTimeoutMs: 30000 },
+        { enabled: true, url: "ws://127.0.0.1:18765", startupTimeoutMs: 60000, requestTimeoutMs: 30000, turnTimeoutMs: 120000 },
         {
           enabled: true,
           allowUnsafeForegroundRouting: true,
@@ -101,7 +105,168 @@ describe("buildCodexSpawn", () => {
         },
         task
       )
-    ).toEqual(["app-server", "desktop-input", "cli"]);
+    ).toEqual(["app-server"]);
+  });
+
+  it("uses app-server to create a real desktop conversation for new phone panel chats", () => {
+    const task = createRunnerTask({
+      source: "panel",
+      refreshWindowId: "LEI-PC:pid:24228"
+    });
+
+    expect(
+      selectCodexExecutionPlan(
+        { enabled: true, url: "ws://127.0.0.1:18765", startupTimeoutMs: 60000, requestTimeoutMs: 30000, turnTimeoutMs: 120000 },
+        {
+          enabled: true,
+          allowUnsafeForegroundRouting: true,
+          scriptPath: "scripts/send-codex-desktop-input.ps1",
+          clickYOffset: 92,
+          windowTitlePattern: "Codex|OpenAI",
+          responseTimeoutMs: 180000
+        },
+        task
+      )
+    ).toEqual(["app-server"]);
+  });
+
+  it("does not use desktop input for a synced Codex conversation when app-server is disabled", () => {
+    const task = createRunnerTask({
+      source: "panel",
+      codexSessionId: "019ea06b-17d8-7a32-8106-334d3ae55286",
+      refreshWindowId: "LEI-PC:pid:24228"
+    });
+
+    expect(
+      selectCodexExecutionPlan(
+        { enabled: false, url: "ws://127.0.0.1:18765", startupTimeoutMs: 60000, requestTimeoutMs: 30000, turnTimeoutMs: 120000 },
+        {
+          enabled: true,
+          allowUnsafeForegroundRouting: true,
+          scriptPath: "scripts/send-codex-desktop-input.ps1",
+          clickYOffset: 92,
+          windowTitlePattern: "Codex|OpenAI",
+          responseTimeoutMs: 180000
+        },
+        task
+      )
+    ).toEqual([]);
+  });
+
+  it("does not fall back to CLI when a desktop Codex session task cannot use app-server", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-runner-"));
+    const marker = path.join(cwd, "cli-ran.txt");
+    const task = createRunnerTask({
+      codexSessionId: "019ea06b-17d8-7a32-8106-334d3ae55286",
+      conversationId: "codex:019ea06b-17d8-7a32-8106-334d3ae55286"
+    });
+    const project = createProject(cwd);
+    const logs: string[] = [];
+
+    const result = await runCodexTask(
+      {
+        command: process.execPath,
+        args: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran')`],
+        promptStdin: false
+      },
+      {
+        enabled: true,
+        url: "ws://127.0.0.1:9",
+        command: process.execPath,
+        startupTimeoutMs: 50,
+        requestTimeoutMs: 50,
+        turnTimeoutMs: 50
+      },
+      {
+        enabled: true,
+        allowUnsafeForegroundRouting: true,
+        scriptPath: "scripts/send-codex-desktop-input.ps1",
+        clickYOffset: 92,
+        windowTitlePattern: "Codex|OpenAI",
+        responseTimeoutMs: 100
+      },
+      task,
+      project,
+      new AbortController().signal,
+      (_stream, text) => logs.push(text)
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.summary).toContain("Codex desktop app-server unavailable");
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(logs.join("")).not.toContain("falling back");
+  });
+
+  it("does not fall back to CLI when a new phone conversation cannot start app-server", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-phone-routing-"));
+    const marker = path.join(cwd, "cli-ran.txt");
+    const phoneTask = createRunnerTask({
+      source: "panel",
+      conversationId: "phone-conversation",
+      codexSessionId: undefined
+    });
+    const result = await runCodexTask(
+      {
+        command: process.execPath,
+        args: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran')`],
+        promptStdin: false
+      },
+      {
+        enabled: true,
+        url: "ws://127.0.0.1:9",
+        command: process.execPath,
+        startupTimeoutMs: 50,
+        requestTimeoutMs: 50,
+        turnTimeoutMs: 50,
+        supervisorIntervalMs: 5000,
+        heartbeatIntervalMs: 10000
+      },
+      {
+        enabled: true,
+        allowUnsafeForegroundRouting: true,
+        scriptPath: "scripts/send-codex-desktop-input.ps1",
+        clickYOffset: 92,
+        windowTitlePattern: "Codex|OpenAI",
+        responseTimeoutMs: 100
+      },
+      phoneTask,
+      createProject(cwd),
+      new AbortController().signal,
+      vi.fn()
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.summary).toContain("Codex desktop app-server unavailable");
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it("never selects desktop-input for a phone panel task", () => {
+    expect(
+      selectCodexExecutionPlan(
+        {
+          enabled: true,
+          url: "ws://127.0.0.1:18765",
+          startupTimeoutMs: 60000,
+          requestTimeoutMs: 30000,
+          turnTimeoutMs: 120000,
+          supervisorIntervalMs: 5000,
+          heartbeatIntervalMs: 10000
+        },
+        {
+          enabled: true,
+          allowUnsafeForegroundRouting: true,
+          scriptPath: "scripts/send-codex-desktop-input.ps1",
+          clickYOffset: 92,
+          windowTitlePattern: "Codex|OpenAI",
+          responseTimeoutMs: 100
+        },
+        createRunnerTask({
+          source: "panel",
+          conversationId: "phone-conversation",
+          refreshWindowId: "LEI-PC:hwnd:1"
+        })
+      )
+    ).toEqual(["app-server"]);
   });
 
   it("does not use unsafe foreground desktop input for phone-created tasks by default", () => {
@@ -109,7 +274,7 @@ describe("buildCodexSpawn", () => {
 
     expect(
       selectCodexExecutionPlan(
-        { enabled: false, url: "ws://127.0.0.1:18765", startupTimeoutMs: 8000, requestTimeoutMs: 30000 },
+        { enabled: false, url: "ws://127.0.0.1:18765", startupTimeoutMs: 60000, requestTimeoutMs: 30000, turnTimeoutMs: 120000 },
         {
           enabled: true,
           scriptPath: "scripts/send-codex-desktop-input.ps1",
@@ -135,14 +300,7 @@ describe("buildCodexSpawn", () => {
       updatedAt: new Date().toISOString(),
       logs: []
     };
-    const project: ProjectConfig = {
-      id: "project-1",
-      name: "Project",
-      path: cwd,
-      defaultMode: "codex",
-      allowedModes: ["codex"],
-      notify: true
-    };
+    const project = createProject(cwd);
     const logs: string[] = [];
 
     const result = await runCodexTask(
@@ -155,7 +313,8 @@ describe("buildCodexSpawn", () => {
         enabled: false,
         url: "ws://127.0.0.1:8765",
         startupTimeoutMs: 100,
-        requestTimeoutMs: 100
+        requestTimeoutMs: 100,
+        turnTimeoutMs: 100
       },
       {
         enabled: false,
@@ -187,5 +346,16 @@ function createRunnerTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
     updatedAt: new Date().toISOString(),
     logs: [],
     ...overrides
+  };
+}
+
+function createProject(projectPath: string): ProjectConfig {
+  return {
+    id: "project-1",
+    name: "Project",
+    path: projectPath,
+    defaultMode: "codex",
+    allowedModes: ["codex"],
+    notify: true
   };
 }

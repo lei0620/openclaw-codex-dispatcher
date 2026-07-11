@@ -1,14 +1,18 @@
+import { createRefreshGate } from "/refreshGate.js";
+import { deriveConnectionStatus } from "/connectionStatus.js";
+
 const lanApiBase = "http://192.168.101.8:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.3.3";
-const releaseNotes = "修复手机消息误发到电脑当前 Codex 对话的问题，默认改用会话安全通道发送任务。";
+const appVersion = "1.5.0";
+const releaseNotes = "新增 NAS、电脑、Codex 三层连接状态；适配新版 Codex 桌面客户端；预热会话服务，并防止手机消息误发到其他对话。";
 let token = localStorage.getItem("openclawToken") || defaultDispatcherToken;
 let apiBase = getStoredApiBase();
 
 const selectionKeys = {
   project: "openclawActiveProject",
   conversation: "openclawActiveConversation",
-  autoFollowConversation: "openclawAutoFollowConversation"
+  autoFollowConversation: "openclawAutoFollowConversation",
+  windowAliases: "openclawWindowAliases"
 };
 
 const state = {
@@ -18,10 +22,13 @@ const state = {
   activeTasks: [],
   approvals: [],
   agents: [],
+  codexWindows: [],
   activeProjectId: localStorage.getItem(selectionKeys.project) || "",
   activeConversationId: localStorage.getItem(selectionKeys.conversation) || "",
   autoFollowConversation: localStorage.getItem(selectionKeys.autoFollowConversation) !== "0",
-  approvalInboxOpen: false
+  windowAliases: loadWindowAliases(),
+  approvalInboxOpen: false,
+  windowPickerOpen: false
 };
 
 const scrollState = {
@@ -30,6 +37,7 @@ const scrollState = {
 };
 
 let knownPendingApprovalIds = new Set();
+const refresh = createRefreshGate(refreshNow);
 
 const modeLabels = {
   "dry-run": "只测试连接",
@@ -55,10 +63,15 @@ const noisyLogPatterns = [
 const els = {
   status: document.querySelector("#status"),
   statusIcon: document.querySelector("#status-icon"),
+  connectionDetails: document.querySelector("#connection-details"),
+  nasStatus: document.querySelector("#nas-status"),
+  agentStatus: document.querySelector("#agent-status"),
+  codexStatus: document.querySelector("#codex-status"),
   mode: document.querySelector("#mode"),
   prompt: document.querySelector("#prompt"),
   form: document.querySelector("#chat-form"),
   submit: document.querySelector("#submit"),
+  submitError: document.querySelector("#submit-error"),
   refresh: document.querySelector("#refresh"),
   syncConversations: document.querySelector("#sync-conversations"),
   checkUpdate: document.querySelector("#check-update"),
@@ -75,9 +88,14 @@ const els = {
   agents: document.querySelector("#agents"),
   messages: document.querySelector("#messages"),
   activeSessions: document.querySelector("#active-sessions"),
+  currentWindowToggle: document.querySelector("#current-window-toggle"),
+  currentWindowLabel: document.querySelector("#current-window-label"),
+  windowPicker: document.querySelector("#window-picker"),
   approvalInbox: document.querySelector("#approval-inbox"),
   approvalToggle: document.querySelector("#approval-toggle"),
   approvalCount: document.querySelector("#approval-count"),
+  refreshWindowBinding: document.querySelector("#refresh-window-binding"),
+  refreshWindowHelp: document.querySelector("#refresh-window-help"),
   currentProjectName: document.querySelector("#current-project-name"),
   conversationTitle: document.querySelector("#conversation-title"),
   conversationList: document.querySelector("#conversation-list"),
@@ -109,6 +127,7 @@ els.autoFollowConversation.checked = state.autoFollowConversation;
 els.token.value = token;
 els.apiBase.value = apiBase;
 els.refresh.addEventListener("click", () => refresh());
+els.statusIcon.addEventListener("click", toggleConnectionDetails);
 els.syncConversations.addEventListener("click", syncConversations);
 els.autoFollowConversation.addEventListener("change", () => {
   setAutoFollow(els.autoFollowConversation.checked);
@@ -117,6 +136,7 @@ els.autoFollowConversation.addEventListener("change", () => {
     renderAll();
   }
 });
+els.refreshWindowBinding.addEventListener("change", bindActiveConversationRefreshWindow);
 els.checkUpdate.addEventListener("click", checkAndroidUpdate);
 els.installUpdate.addEventListener("click", installAndroidUpdate);
 els.saveApiBase.addEventListener("click", saveApiBase);
@@ -129,6 +149,7 @@ els.sidebarToggle.addEventListener("click", openSidebar);
 els.sidebarClose.addEventListener("click", closeSidebar);
 els.sidebarScrim.addEventListener("click", closeSidebar);
 els.approvalToggle.addEventListener("click", toggleApprovalInbox);
+els.currentWindowToggle.addEventListener("click", toggleWindowPicker);
 els.settingsOpen.addEventListener("click", openSettings);
 els.settingsClose.addEventListener("click", closeSettings);
 els.settingsScrim.addEventListener("click", closeSettings);
@@ -236,37 +257,50 @@ function setUpdateStatus(message) {
   els.updateStatus.textContent = message;
 }
 
-async function refresh() {
+async function refreshNow() {
   if (!token) {
     els.status.textContent = "请输入访问密码";
-    setConnectionState("pending", "请输入访问密码");
+    setConnectionState({ level: "recovering", label: "需要密码", detail: "请输入访问密码" });
+    renderConnectionDetails({ nasReachable: false, onlineAgents: 0, readyCodex: 0 });
     renderEmptyState();
     return;
   }
 
   try {
     const projectsPayload = await api("/api/projects");
+    const healthPayload = api("/api/health");
     const agentsPayload = api("/api/agents");
     const approvalsPayload = api("/api/approvals?status=pending");
+    const windowsPayload = api("/api/codex-windows");
     const projects = projectsPayload.projects ?? [];
     const conversations = await loadRecentProjectConversations(projects);
     const agents = await agentsPayload;
     const approvals = await approvalsPayload;
+    const windows = await windowsPayload;
+    const health = await healthPayload;
     state.projects = projects;
     state.conversations = conversations;
     state.agents = agents.agents ?? [];
     state.approvals = approvals.approvals ?? [];
+    state.codexWindows = windows.windows ?? [];
     state.activeTasks = await loadActiveSessionTasks();
     ensureSelection();
     await loadActiveTasks();
     renderAll();
 
-    const online = state.agents.filter((agent) => agent.online).length;
-    els.status.textContent = online > 0 ? `${online} 台电脑在线` : "没有电脑在线";
-    setConnectionState(online > 0 ? "online" : "offline", online > 0 ? `${online} 台电脑在线` : "没有电脑在线");
+    const connectionInput = {
+      nasReachable: health.services?.nas?.reachable === true,
+      onlineAgents: Number(health.services?.agents?.online ?? 0),
+      readyCodex: Number(health.services?.codex?.ready ?? 0)
+    };
+    const connectionStatus = deriveConnectionStatus(connectionInput);
+    els.status.textContent = connectionStatus.detail;
+    setConnectionState(connectionStatus);
+    renderConnectionDetails(connectionInput);
   } catch (error) {
     els.status.textContent = "连接失败，请检查服务地址、密码或 NAS 服务";
-    setConnectionState("offline", "连接失败");
+    setConnectionState({ level: "offline", label: "未连接", detail: "无法连接 NAS" });
+    renderConnectionDetails({ nasReachable: false, onlineAgents: 0, readyCodex: 0 });
     els.messages.innerHTML = `<div class="empty">连接失败：${escapeHtml(describeConnectionError(error))}</div>`;
   }
 }
@@ -290,11 +324,24 @@ async function syncConversations() {
   }
 }
 
-function setConnectionState(stateName, label) {
-  els.statusIcon.className = `computer-status ${stateName}`;
-  els.statusIcon.setAttribute("aria-label", label);
-  els.statusIcon.title = label;
-  els.status.dataset.state = stateName;
+function setConnectionState(connectionStatus) {
+  els.statusIcon.className = `connection-status computer-status ${connectionStatus.level}`;
+  els.statusIcon.dataset.level = connectionStatus.level;
+  els.statusIcon.setAttribute("aria-label", connectionStatus.label);
+  els.statusIcon.title = connectionStatus.detail;
+  els.status.dataset.state = connectionStatus.level;
+}
+
+function renderConnectionDetails({ nasReachable, onlineAgents, readyCodex }) {
+  els.nasStatus.textContent = nasReachable ? "已连接" : "未连接";
+  els.agentStatus.textContent = onlineAgents > 0 ? `${onlineAgents} 台在线` : "未上线";
+  els.codexStatus.textContent = readyCodex > 0 ? "可用" : onlineAgents > 0 ? "恢复中" : "等待电脑";
+}
+
+function toggleConnectionDetails() {
+  const willOpen = els.connectionDetails.hidden;
+  els.connectionDetails.hidden = !willOpen;
+  els.statusIcon.setAttribute("aria-expanded", String(willOpen));
 }
 
 function saveToken() {
@@ -338,6 +385,7 @@ async function submitTask(event) {
 
   els.submit.disabled = true;
   els.submit.textContent = "发送中";
+  setSubmitError("");
 
   try {
     const payload = await api("/api/tasks", {
@@ -357,10 +405,28 @@ async function submitTask(event) {
     els.prompt.value = "";
     requestMessageScrollToBottom();
     await refresh();
+  } catch (error) {
+    setSubmitError(friendlySubmitError(error));
   } finally {
     els.submit.disabled = false;
-    els.submit.textContent = "发送给 Codex";
+    els.submit.textContent = "发送";
   }
+}
+
+function setSubmitError(message) {
+  if (!els.submitError) {
+    return;
+  }
+  els.submitError.hidden = !message;
+  els.submitError.textContent = message;
+}
+
+function friendlySubmitError(error) {
+  const message = extractApiErrorMessage(error);
+  if (message.includes("先给这个对话绑定一个电脑窗口")) {
+    return "先给这个对话绑定一个电脑窗口，再发送。点顶部“窗口”按钮选择对应的 Codex 窗口。";
+  }
+  return message || "发送失败，请稍后再试。";
 }
 
 async function cancelTask(taskId) {
@@ -401,6 +467,7 @@ async function createNewConversation(projectId = state.activeProjectId) {
 
 async function switchProject(projectId) {
   setAutoFollow(false);
+  closeWindowPicker();
   state.activeProjectId = projectId;
   state.activeConversationId = conversationsForProject(projectId)[0]?.id ?? "";
   persistSelection();
@@ -412,6 +479,7 @@ async function switchProject(projectId) {
 
 async function switchConversation(conversationId) {
   setAutoFollow(false);
+  closeWindowPicker();
   const conversation = state.conversations.find((item) => item.id === conversationId);
   if (!conversation) {
     return;
@@ -433,6 +501,14 @@ async function loadActiveTasks() {
 
   const payload = await api(`/api/conversations/${state.activeConversationId}/tasks`);
   state.tasks = payload.tasks ?? [];
+  if (payload.conversation) {
+    const index = state.conversations.findIndex((conversation) => conversation.id === payload.conversation.id);
+    if (index >= 0) {
+      state.conversations[index] = payload.conversation;
+    } else {
+      state.conversations.unshift(payload.conversation);
+    }
+  }
 }
 
 async function loadActiveSessionTasks() {
@@ -458,6 +534,8 @@ function renderAll() {
   renderHeader();
   renderModes();
   renderAgents();
+  renderCurrentWindowSwitcher();
+  renderRefreshWindowBinding();
   renderApprovals();
   renderActiveSessions();
   renderConversationSidebar();
@@ -601,6 +679,230 @@ function renderAgents() {
       .join("") || `<div class="empty">还没有 Win11 执行端在线</div>`;
 }
 
+function renderRefreshWindowBinding() {
+  const conversation = getActiveConversation();
+  const current = conversation?.refreshWindowId || "";
+  const options = [
+    `<option value="">不绑定，多个窗口时自动跳过刷新</option>`,
+    ...state.codexWindows.map((window) => {
+      const label = `${getWindowDisplayName(window)} · ${window.agentId}`;
+      return `<option value="${escapeHtml(window.id)}">${escapeHtml(label)}</option>`;
+    })
+  ];
+  els.refreshWindowBinding.innerHTML = options.join("");
+  els.refreshWindowBinding.value = state.codexWindows.some((window) => window.id === current) ? current : "";
+  els.refreshWindowBinding.disabled = !conversation || state.codexWindows.length === 0;
+  if (!conversation) {
+    els.refreshWindowHelp.textContent = "先选择或新建一个会话，再绑定电脑 Codex 窗口。";
+  } else if (state.codexWindows.length === 0) {
+    els.refreshWindowHelp.textContent = "还没检测到电脑 Codex 窗口，确认 Win11 已打开 Codex。";
+  } else if (current && els.refreshWindowBinding.value === current) {
+    els.refreshWindowHelp.textContent = "已绑定。这个会话完成后只刷新这个 Codex 窗口。";
+  } else if (current) {
+    els.refreshWindowHelp.textContent = "原绑定窗口暂时不在线，刷新会先跳过，避免影响其他窗口。";
+  } else {
+    els.refreshWindowHelp.textContent = "绑定后，这个会话完成时只刷新指定的电脑 Codex 窗口。";
+  }
+}
+
+function renderCurrentWindowSwitcher() {
+  const conversation = getActiveConversation();
+  const current = conversation?.refreshWindowId || "";
+  const currentWindow = state.codexWindows.find((window) => window.id === current);
+  const hasWindows = state.codexWindows.length > 0;
+  const disabled = !conversation || !hasWindows;
+  const label = getCurrentWindowLabel(conversation, currentWindow, current);
+
+  els.currentWindowToggle.disabled = disabled;
+  els.currentWindowToggle.classList.toggle("bound", Boolean(currentWindow));
+  els.currentWindowToggle.classList.toggle("offline", Boolean(current && !currentWindow));
+  els.currentWindowToggle.setAttribute("aria-expanded", state.windowPickerOpen ? "true" : "false");
+  els.currentWindowToggle.title = label;
+  els.currentWindowLabel.textContent = getCurrentWindowButtonLabel(conversation, currentWindow, current);
+
+  els.windowPicker.hidden = !state.windowPickerOpen || disabled;
+  if (els.windowPicker.hidden) {
+    els.windowPicker.innerHTML = "";
+    return;
+  }
+
+  els.windowPicker.innerHTML = `
+    <div class="window-picker-header">
+      <strong>发送到哪个电脑窗口</strong>
+      <span>${state.codexWindows.length} 个在线</span>
+    </div>
+    <div class="window-picker-list">
+      ${state.codexWindows.map((window) => renderWindowPickerItem(window, current)).join("")}
+    </div>
+    <button class="window-picker-clear" data-window-bind="" type="button">不绑定窗口</button>
+  `;
+  els.windowPicker.querySelectorAll("[data-window-bind]").forEach((button) => {
+    button.addEventListener("click", () => bindActiveConversationRefreshWindow(button.dataset.windowBind));
+  });
+  els.windowPicker.querySelectorAll("[data-window-rename]").forEach((button) => {
+    button.addEventListener("click", () => renameCodexWindow(button.dataset.windowRename));
+  });
+}
+
+function getCurrentWindowLabel(conversation, currentWindow, current) {
+  if (!conversation) {
+    return "未选会话";
+  }
+  if (currentWindow) {
+    return getWindowDisplayName(currentWindow);
+  }
+  if (current) {
+    return "窗口不可用";
+  }
+  if (state.codexWindows.length === 1) {
+    return `可选 ${state.codexWindows[0].processId}`;
+  }
+  if (state.codexWindows.length > 1) {
+    return "选择窗口";
+  }
+  return "无窗口";
+}
+
+function getCurrentWindowButtonLabel(conversation, currentWindow, current) {
+  if (!conversation) {
+    return "窗口";
+  }
+  if (current && !currentWindow) {
+    return "不可用";
+  }
+  if (currentWindow) {
+    return getWindowButtonShortName(currentWindow);
+  }
+  return "窗口";
+}
+
+function renderWindowPickerItem(window, current) {
+  const active = window.id === current;
+  const displayName = getWindowDisplayName(window);
+  const boundConversation = getWindowBoundConversation(window);
+  const title = compactText(window.title || "Codex", 32);
+  const boundHint = boundConversation ? `已绑定：${compactText(boundConversation.title || boundConversation.projectId, 24)}` : "未绑定会话";
+  const technicalHint = `${window.agentId} · pid ${window.processId} · 窗 ${shortWindowHandle(window)}`;
+  return `
+    <div class="window-picker-item ${active ? "active" : ""}">
+      <button class="window-picker-select" data-window-bind="${escapeHtml(window.id)}" type="button">
+        <span class="window-picker-title">${escapeHtml(displayName)}</span>
+        <span class="window-picker-meta">${escapeHtml(boundHint)}</span>
+        <span class="window-picker-subtitle">${escapeHtml(title)}</span>
+        <span class="window-picker-meta">${escapeHtml(technicalHint)}</span>
+      </button>
+      <button class="window-picker-rename" data-window-rename="${escapeHtml(window.id)}" type="button">备注</button>
+    </div>
+  `;
+}
+
+function getWindowDisplayName(window) {
+  const remark = getWindowRemark(window);
+  if (remark) {
+    return remark;
+  }
+  const boundConversation = getWindowBoundConversation(window);
+  if (boundConversation?.id === state.activeConversationId) {
+    return `当前会话 · 窗 ${shortWindowHandle(window)}`;
+  }
+  if (boundConversation?.title) {
+    return compactText(boundConversation.title, 16);
+  }
+  return `Codex · 窗 ${shortWindowHandle(window)}`;
+}
+
+function getWindowButtonShortName(window) {
+  const remark = getWindowRemark(window);
+  if (remark) {
+    return compactText(remark, 5);
+  }
+  return `窗 ${shortWindowHandle(window)}`;
+}
+
+function getWindowBoundConversation(window) {
+  return state.conversations.find((conversation) => conversation.refreshWindowId === window.id);
+}
+
+function getWindowAlias(windowId) {
+  return (state.windowAliases[windowId] || "").trim();
+}
+
+function getWindowRemark(window) {
+  return (window?.remark || getWindowAlias(window?.id) || "").trim();
+}
+
+function loadWindowAliases() {
+  try {
+    const aliases = JSON.parse(localStorage.getItem(selectionKeys.windowAliases) || "{}");
+    return aliases && typeof aliases === "object" && !Array.isArray(aliases) ? aliases : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveWindowAliases() {
+  localStorage.setItem(selectionKeys.windowAliases, JSON.stringify(state.windowAliases));
+}
+
+async function renameCodexWindow(windowId) {
+  const codexWindow = state.codexWindows.find((item) => item.id === windowId);
+  if (!codexWindow) {
+    return;
+  }
+  const currentName = getWindowRemark(codexWindow);
+  const nextName = window.prompt("给这个 Codex 窗口写个备注，例如：openclaw 主窗口", currentName);
+  if (nextName === null) {
+    return;
+  }
+  const normalized = nextName.trim().slice(0, 18);
+  try {
+    const payload = await api("/api/codex-windows/remark", {
+      method: "POST",
+      body: JSON.stringify({ windowId, remark: normalized })
+    });
+    state.codexWindows = payload.windows ?? state.codexWindows.map((item) =>
+      item.id === windowId ? { ...item, remark: payload.window?.remark } : item
+    );
+    delete state.windowAliases[windowId];
+  } catch {
+    if (normalized) {
+      state.windowAliases[windowId] = normalized;
+    } else {
+      delete state.windowAliases[windowId];
+    }
+  }
+  saveWindowAliases();
+  renderRefreshWindowBinding();
+  renderCurrentWindowSwitcher();
+}
+
+function shortWindowHandle(window) {
+  const handle = String(window?.handle || window?.id || "");
+  return handle.length > 4 ? handle.slice(-4) : handle || "--";
+}
+
+async function bindActiveConversationRefreshWindow(selectedRefreshWindowId) {
+  const conversation = getActiveConversation();
+  if (!conversation) {
+    return;
+  }
+  const refreshWindowId = selectedRefreshWindowId ?? els.refreshWindowBinding.value;
+  const payload = await api(`/api/conversations/${encodeURIComponent(conversation.id)}/refresh-window`, {
+    method: "POST",
+    body: JSON.stringify({ refreshWindowId })
+  });
+  const index = state.conversations.findIndex((item) => item.id === payload.conversation.id);
+  if (index >= 0) {
+    state.conversations[index] = payload.conversation;
+  }
+  state.windowPickerOpen = false;
+  if (els.refreshWindowBinding) {
+    els.refreshWindowBinding.value = refreshWindowId;
+  }
+  renderRefreshWindowBinding();
+  renderCurrentWindowSwitcher();
+}
+
 function renderApprovals() {
   const pending = state.approvals.filter((approval) => approval.status === "pending");
   notifyPendingApprovals(pending);
@@ -646,6 +948,7 @@ function renderApprovalCard(approval) {
 }
 
 function toggleApprovalInbox() {
+  closeWindowPicker();
   state.approvalInboxOpen = !state.approvalInboxOpen;
   renderApprovals();
 }
@@ -653,6 +956,24 @@ function toggleApprovalInbox() {
 function closeApprovalInbox() {
   state.approvalInboxOpen = false;
   renderApprovals();
+}
+
+function toggleWindowPicker() {
+  if (els.currentWindowToggle.disabled) {
+    return;
+  }
+  state.approvalInboxOpen = false;
+  state.windowPickerOpen = !state.windowPickerOpen;
+  renderApprovals();
+  renderCurrentWindowSwitcher();
+}
+
+function closeWindowPicker() {
+  if (!state.windowPickerOpen) {
+    return;
+  }
+  state.windowPickerOpen = false;
+  renderCurrentWindowSwitcher();
 }
 
 function notifyPendingApprovals(pending) {
@@ -737,7 +1058,7 @@ function getVisibleTasksForConversation(conversation, historyMessages) {
     return state.tasks;
   }
   return state.tasks.filter((task) => {
-    const representedInHistory = historyMessages.some((message) => message.role === "user" && message.text.trim() === task.prompt.trim());
+    const representedInHistory = isTaskPromptInHistory(task, historyMessages);
     if (!representedInHistory) {
       return true;
     }
@@ -745,13 +1066,26 @@ function getVisibleTasksForConversation(conversation, historyMessages) {
   });
 }
 
+function isTaskPromptInHistory(task, historyMessages) {
+  const prompt = normalizeComparableMessageText(task.prompt);
+  if (!prompt) {
+    return false;
+  }
+  return historyMessages.some((message) => message.role === "user" && normalizeComparableMessageText(message.text) === prompt);
+}
+
+function normalizeComparableMessageText(text) {
+  return String(text ?? "").trim();
+}
+
 function renderSyncedHistory(messages) {
   return messages.length > 0 ? `<p class="history-note">电脑 Codex 最近历史</p>` : "";
 }
 
 function renderTimeline(historyMessages, tasks, prefixHtml) {
+  const timelineHistoryMessages = dedupeTimelineHistoryMessages(historyMessages);
   const items = [];
-  historyMessages.forEach((message, index) => {
+  timelineHistoryMessages.forEach((message, index) => {
     items.push({
       at: message.at,
       order: index,
@@ -760,12 +1094,14 @@ function renderTimeline(historyMessages, tasks, prefixHtml) {
   });
 
   tasks.forEach((task, index) => {
-    const order = historyMessages.length + index * 2;
-    items.push({
-      at: task.createdAt,
-      order,
-      html: renderUserMessage(task)
-    });
+    const order = timelineHistoryMessages.length + index * 2;
+    if (!isTaskPromptInHistory(task, timelineHistoryMessages)) {
+      items.push({
+        at: task.createdAt,
+        order,
+        html: renderUserMessage(task)
+      });
+    }
     items.push({
       at: task.finishedAt || task.updatedAt || task.createdAt,
       order: order + 1,
@@ -778,6 +1114,40 @@ function renderTimeline(historyMessages, tasks, prefixHtml) {
     .map((item) => item.html)
     .join("");
   return prefixHtml + html;
+}
+
+function dedupeTimelineHistoryMessages(messages) {
+  const deduped = [];
+  messages.forEach((message) => {
+    const previous = deduped.at(-1);
+    if (isLikelyDuplicateHistoryMessage(previous, message)) {
+      return;
+    }
+    deduped.push(message);
+  });
+  return deduped;
+}
+
+function isLikelyDuplicateHistoryMessage(previous, message) {
+  if (!previous || previous.role !== "user" || message?.role !== "user") {
+    return false;
+  }
+  const previousText = normalizeComparableMessageText(previous.text);
+  const text = normalizeComparableMessageText(message.text);
+  if (!text || previousText !== text) {
+    return false;
+  }
+  const distance = timeDistanceMs(previous.at, message.at);
+  return !Number.isFinite(distance) || distance <= 120000;
+}
+
+function timeDistanceMs(left, right) {
+  const leftTime = Date.parse(left || "");
+  const rightTime = Date.parse(right || "");
+  if (!Number.isFinite(leftTime) || !Number.isFinite(rightTime)) {
+    return Number.NaN;
+  }
+  return Math.abs(rightTime - leftTime);
 }
 
 function compareTimelineItems(left, right) {
@@ -965,6 +1335,13 @@ function isNoisyLog(line) {
 function renderEmptyState() {
   els.currentProjectName.textContent = "手机遥控 Codex";
   els.conversationTitle.textContent = "像和 Codex 聊天一样发任务";
+  state.windowPickerOpen = false;
+  els.currentWindowToggle.disabled = true;
+  els.currentWindowToggle.classList.remove("bound", "offline");
+  els.currentWindowToggle.setAttribute("aria-expanded", "false");
+  els.currentWindowLabel.textContent = "窗口";
+  els.windowPicker.hidden = true;
+  els.windowPicker.innerHTML = "";
   els.conversationList.innerHTML = `<div class="sidebar-empty">保存访问密码后显示项目和对话。</div>`;
   els.agents.innerHTML = `<div class="empty">保存访问密码后显示 Win11 状态</div>`;
   state.activeTasks = [];
@@ -1090,6 +1467,7 @@ function formatRelativeTime(value) {
 }
 
 function openSidebar() {
+  closeWindowPicker();
   els.sidebar.classList.add("open");
   els.sidebarScrim.hidden = false;
 }
@@ -1100,6 +1478,7 @@ function closeSidebar() {
 }
 
 function openSettings() {
+  closeWindowPicker();
   els.settingsPanel.hidden = false;
   els.settingsScrim.hidden = false;
 }
@@ -1139,7 +1518,7 @@ async function api(url, options = {}) {
       body: options.body || ""
     });
     if (result.status < 200 || result.status >= 300) {
-      throw new Error(result.body || `HTTP ${result.status}`);
+      throw new Error(extractApiErrorMessage(result.body) || `HTTP ${result.status}`);
     }
     return JSON.parse(result.body || "{}");
   }
@@ -1153,9 +1532,22 @@ async function api(url, options = {}) {
     }
   });
   if (!response.ok) {
-    throw new Error(await response.text());
+    throw new Error(extractApiErrorMessage(await response.text()) || `HTTP ${response.status}`);
   }
   return response.json();
+}
+
+function extractApiErrorMessage(error) {
+  const raw = typeof error === "string" ? error : error?.message || String(error || "");
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.error === "string") {
+      return parsed.error;
+    }
+  } catch {
+    // Plain text errors are already usable.
+  }
+  return raw;
 }
 
 function normalizeApiBase(value) {

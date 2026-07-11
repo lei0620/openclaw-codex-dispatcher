@@ -1,7 +1,10 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { isCodexContextMessage, selectRecentConversationMessages } from "../src/agent/codexSessions.js";
+import { isCodexContextMessage, readRecentCodexConversations, selectRecentConversationMessages } from "../src/agent/codexSessions.js";
 import { stripInternalMarkup } from "../src/shared/textSanitizer.js";
-import type { ConversationMessage } from "../src/shared/types.js";
+import type { ConversationMessage, ProjectConfig } from "../src/shared/types.js";
 
 describe("selectRecentConversationMessages", () => {
   it("keeps the latest user turn even when many assistant progress messages follow", () => {
@@ -63,4 +66,91 @@ describe("selectRecentConversationMessages", () => {
       stripInternalMarkup(`收到了，这次是实时进来的。\n\n<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-3|note=[x]\n</citation_entries>\n</oai-mem-citation>`)
     ).toBe("收到了，这次是实时进来的。");
   });
+
+  it("syncs recent messages from a large session file without reading the whole file", () => {
+    const previousEnv = {
+      CODEX_HOME: process.env.CODEX_HOME,
+      OPENCLAW_CODEX_SESSION_FULL_READ_MAX_BYTES: process.env.OPENCLAW_CODEX_SESSION_FULL_READ_MAX_BYTES,
+      OPENCLAW_CODEX_SESSION_HEAD_BYTES: process.env.OPENCLAW_CODEX_SESSION_HEAD_BYTES,
+      OPENCLAW_CODEX_SESSION_TAIL_BYTES: process.env.OPENCLAW_CODEX_SESSION_TAIL_BYTES
+    };
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-home-"));
+    try {
+      process.env.CODEX_HOME = tmp;
+      process.env.OPENCLAW_CODEX_SESSION_FULL_READ_MAX_BYTES = "200";
+      process.env.OPENCLAW_CODEX_SESSION_HEAD_BYTES = "512";
+      process.env.OPENCLAW_CODEX_SESSION_TAIL_BYTES = "700";
+      const projectPath = path.join(tmp, "project");
+      const sessionsDir = path.join(tmp, "sessions", "2026", "06", "30");
+      fs.mkdirSync(projectPath, { recursive: true });
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      const sessionId = "019ea06b-17d8-7a32-8106-334d3ae55286";
+      const sessionFile = path.join(sessionsDir, `rollout-2026-06-30T20-00-00-${sessionId}.jsonl`);
+      const meta = {
+        type: "session_meta",
+        payload: {
+          id: sessionId,
+          cwd: projectPath,
+          timestamp: "2026-06-30T12:00:00.000Z"
+        }
+      };
+      const userMessage = {
+        type: "response_item",
+        timestamp: "2026-06-30T12:01:00.000Z",
+        payload: { type: "message", role: "user", content: [{ text: "手机端窗口备注测试" }] }
+      };
+      const assistantMessage = {
+        type: "response_item",
+        timestamp: "2026-06-30T12:01:30.000Z",
+        payload: { type: "message", role: "assistant", content: [{ text: "备注已收到。" }] }
+      };
+      fs.writeFileSync(
+        sessionFile,
+        [
+          JSON.stringify(meta),
+          "x".repeat(1024),
+          JSON.stringify(userMessage),
+          JSON.stringify(assistantMessage)
+        ].join("\n"),
+        "utf8"
+      );
+      const projects: ProjectConfig[] = [
+        {
+          id: "demo",
+          name: "Demo",
+          path: projectPath,
+          defaultMode: "codex",
+          allowedModes: ["codex"],
+          notify: true
+        }
+      ];
+
+      const conversations = readRecentCodexConversations(projects);
+
+      expect(conversations).toMatchObject([
+        {
+          projectId: "demo",
+          sessionId,
+          messages: [
+            { role: "user", text: "手机端窗口备注测试" },
+            { role: "assistant", text: "备注已收到。" }
+          ]
+        }
+      ]);
+    } finally {
+      restoreEnv("CODEX_HOME", previousEnv.CODEX_HOME);
+      restoreEnv("OPENCLAW_CODEX_SESSION_FULL_READ_MAX_BYTES", previousEnv.OPENCLAW_CODEX_SESSION_FULL_READ_MAX_BYTES);
+      restoreEnv("OPENCLAW_CODEX_SESSION_HEAD_BYTES", previousEnv.OPENCLAW_CODEX_SESSION_HEAD_BYTES);
+      restoreEnv("OPENCLAW_CODEX_SESSION_TAIL_BYTES", previousEnv.OPENCLAW_CODEX_SESSION_TAIL_BYTES);
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}

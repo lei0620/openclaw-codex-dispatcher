@@ -6,6 +6,8 @@ import type {
   AgentRecord,
   ApprovalRecord,
   ApprovalStatus,
+  CodexDesktopWindow,
+  CodexServiceStatus,
   ConversationRecord,
   CreateTaskInput,
   ProjectConfig,
@@ -13,6 +15,7 @@ import type {
   TaskLogStream,
   TaskRecord,
   TaskResult,
+  TaskStatus,
   TaskSource
 } from "../shared/types.js";
 
@@ -27,6 +30,8 @@ export class TaskStore extends EventEmitter {
   private readonly approvals = new Map<string, ApprovalRecord>();
   private readonly agents = new Map<string, AgentRecord>();
   private readonly agentProjects = new Map<string, ProjectConfig[]>();
+  private readonly codexWindows = new Map<string, CodexDesktopWindow>();
+  private readonly codexWindowRemarks = new Map<string, string>();
   private readonly storagePath?: string;
 
   constructor(storagePath?: string) {
@@ -83,6 +88,7 @@ export class TaskStore extends EventEmitter {
         updatedAt,
         source: "codex",
         codexSessionId: item.sessionId,
+        refreshWindowId: existing?.refreshWindowId,
         messages: item.messages
       };
       this.conversations.set(id, record);
@@ -102,11 +108,16 @@ export class TaskStore extends EventEmitter {
     const now = new Date().toISOString();
     const conversationId = input.conversationId ?? this.createConversation({ projectId: input.projectId, title: input.prompt }).id;
     const conversation = this.conversations.get(conversationId);
+    const refreshWindowId = this.resolveConversationRefreshWindow(conversation);
+    if (conversation && refreshWindowId && !conversation.refreshWindowId) {
+      conversation.refreshWindowId = refreshWindowId;
+    }
     const task: TaskRecord = {
       id: randomUUID(),
       projectId: input.projectId,
       conversationId,
       codexSessionId: conversation?.codexSessionId,
+      refreshWindowId,
       prompt: input.prompt,
       mode: input.mode,
       source: input.source ?? "api",
@@ -136,13 +147,14 @@ export class TaskStore extends EventEmitter {
   }
 
   assignNextTask(agentId: string): TaskRecord | undefined {
+    const activeSlots = this.getActiveSlotKeys(agentId);
     const task = this.order
       .map((id) => this.tasks.get(id))
       .find((candidate): candidate is TaskRecord => {
         if (!candidate) {
           return false;
         }
-        return candidate.status === "queued";
+        return candidate.status === "queued" && !activeSlots.has(getTaskSlotKey(candidate));
       });
     if (!task) {
       return undefined;
@@ -181,6 +193,21 @@ export class TaskStore extends EventEmitter {
     this.save();
     this.emitChange("task.updated", task);
     return task;
+  }
+
+  createSimulatedApproval(input: { projectId: string; message: string }): ApprovalRecord {
+    const now = new Date().toISOString();
+    const record: ApprovalRecord = {
+      id: randomUUID(),
+      taskId: `simulated-${randomUUID()}`,
+      projectId: input.projectId,
+      message: input.message,
+      status: "pending",
+      createdAt: now
+    };
+    this.approvals.set(record.id, record);
+    this.save();
+    return structuredClone(record);
   }
 
   completeTask(taskId: string, result: TaskResult): TaskRecord {
@@ -275,6 +302,40 @@ export class TaskStore extends EventEmitter {
     return agent;
   }
 
+  heartbeatAgent(
+    agentId: string,
+    codex: CodexServiceStatus,
+    at = new Date().toISOString()
+  ): void {
+    const current = this.agents.get(agentId) ?? {
+      id: agentId,
+      online: true,
+      connectedAt: at,
+      lastSeenAt: at
+    };
+    const agent = { ...current, online: true, lastSeenAt: at, codex };
+    this.agents.set(agentId, agent);
+    this.emitChange("agent.updated", agent);
+  }
+
+  markStaleAgentsOffline(cutoffMs: number, nowMs = Date.now()): void {
+    for (const [id, agent] of this.agents.entries()) {
+      const lastSeenMs = Date.parse(agent.lastSeenAt);
+      if (!Number.isFinite(lastSeenMs) || nowMs - lastSeenMs <= cutoffMs || !agent.online) {
+        continue;
+      }
+      const offline = { ...agent, online: false };
+      this.agents.set(id, offline);
+      this.clearAgentCodexWindows(id);
+      this.emitChange("agent.updated", offline);
+    }
+  }
+
+  isAgentReady(agentId: string): boolean {
+    const agent = this.agents.get(agentId);
+    return Boolean(agent?.online && agent.codex?.ready);
+  }
+
   markAgentOffline(agentId: string): AgentRecord | undefined {
     const agent = this.agents.get(agentId);
     if (!agent) {
@@ -282,6 +343,7 @@ export class TaskStore extends EventEmitter {
     }
     agent.online = false;
     agent.lastSeenAt = new Date().toISOString();
+    this.clearAgentCodexWindows(agentId);
     this.emitChange("agent.updated", agent);
     return agent;
   }
@@ -322,6 +384,118 @@ export class TaskStore extends EventEmitter {
   setAgentProjects(agentId: string, projects: ProjectConfig[]): ProjectConfig[] {
     this.agentProjects.set(agentId, structuredClone(projects));
     return this.listProjects();
+  }
+
+  setAgentCodexWindows(agentId: string, windows: CodexDesktopWindow[]): CodexDesktopWindow[] {
+    for (const [id, window] of this.codexWindows.entries()) {
+      if (window.agentId === agentId) {
+        this.codexWindows.delete(id);
+      }
+    }
+    const now = new Date().toISOString();
+    for (const window of windows) {
+      const id = window.id || `${agentId}:${window.handle}`;
+      const remark = this.codexWindowRemarks.get(id);
+      const normalized: CodexDesktopWindow = {
+        ...window,
+        id,
+        agentId,
+        handle: String(window.handle),
+        remark: remark || undefined,
+        updatedAt: window.updatedAt || now
+      };
+      this.codexWindows.set(normalized.id, normalized);
+    }
+    return this.listCodexWindows();
+  }
+
+  listCodexWindows(): CodexDesktopWindow[] {
+    const onlineAgentIds = new Set([...this.agents.values()].filter((agent) => agent.online).map((agent) => agent.id));
+    return [...this.codexWindows.values()]
+      .filter((window) => onlineAgentIds.has(window.agentId))
+      .sort((a, b) => {
+        const agentCompare = a.agentId.localeCompare(b.agentId);
+        if (agentCompare !== 0) {
+          return agentCompare;
+        }
+        return String(b.startedAt || b.updatedAt).localeCompare(String(a.startedAt || a.updatedAt));
+      })
+      .map((window) => structuredClone(window));
+  }
+
+  private clearAgentCodexWindows(agentId: string): void {
+    for (const [id, window] of this.codexWindows.entries()) {
+      if (window.agentId === agentId) {
+        this.codexWindows.delete(id);
+      }
+    }
+  }
+
+  private getOnlyOnlineCodexWindowId(): string | undefined {
+    const windows = this.listCodexWindows();
+    return windows.length === 1 ? windows[0].id : undefined;
+  }
+
+  private resolveConversationRefreshWindow(conversation: ConversationRecord | undefined): string | undefined {
+    const current = conversation?.refreshWindowId;
+    if (!current) {
+      return this.getOnlyOnlineCodexWindowId();
+    }
+    if (this.codexWindows.has(current)) {
+      return current;
+    }
+    const pidMatch = current.match(/:pid:(\d+)$/);
+    if (pidMatch) {
+      const matches = this.listCodexWindows().filter((window) => String(window.processId) === pidMatch[1]);
+      if (matches.length === 1) {
+        conversation.refreshWindowId = matches[0].id;
+        return matches[0].id;
+      }
+    }
+    conversation.refreshWindowId = undefined;
+    return this.getOnlyOnlineCodexWindowId();
+  }
+
+  private getActiveSlotKeys(agentId: string): Set<string> {
+    const activeStatuses = new Set<TaskStatus>(["running", "waiting_approval", "cancelling"]);
+    return new Set(
+      [...this.tasks.values()]
+        .filter((task) => task.agentId === agentId && activeStatuses.has(task.status))
+        .map((task) => getTaskSlotKey(task))
+    );
+  }
+
+  bindConversationRefreshWindow(conversationId: string, refreshWindowId?: string): ConversationRecord {
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) {
+      throw new Error(`conversation not found: ${conversationId}`);
+    }
+    const normalized = (refreshWindowId ?? "").trim();
+    if (normalized && !this.codexWindows.has(normalized)) {
+      throw new Error(`codex window not found: ${normalized}`);
+    }
+    conversation.refreshWindowId = normalized || undefined;
+    conversation.updatedAt = new Date().toISOString();
+    this.save();
+    return structuredClone(conversation);
+  }
+
+  renameCodexWindow(windowId: string, remark: string): CodexDesktopWindow {
+    const window = this.codexWindows.get(windowId);
+    if (!window) {
+      throw new Error(`codex window not found: ${windowId}`);
+    }
+    const normalized = normalizeWindowRemark(remark);
+    if (normalized) {
+      this.codexWindowRemarks.set(windowId, normalized);
+      window.remark = normalized;
+    } else {
+      this.codexWindowRemarks.delete(windowId);
+      window.remark = undefined;
+    }
+    window.updatedAt = new Date().toISOString();
+    this.save();
+    return structuredClone(window);
   }
 
   listProjects(configuredProjects: ProjectConfig[] = []): ProjectConfig[] {
@@ -404,7 +578,14 @@ export class TaskStore extends EventEmitter {
     const raw = JSON.parse(fs.readFileSync(this.storagePath, "utf8")) as {
       conversations?: ConversationRecord[];
       tasks?: TaskRecord[];
+      windowRemarks?: Record<string, string>;
     };
+    for (const [windowId, remark] of Object.entries(raw.windowRemarks ?? {})) {
+      const normalized = normalizeWindowRemark(remark);
+      if (windowId && normalized) {
+        this.codexWindowRemarks.set(windowId, normalized);
+      }
+    }
     for (const conversation of raw.conversations ?? []) {
       this.conversations.set(conversation.id, conversation);
       this.conversationOrder.push(conversation.id);
@@ -430,7 +611,8 @@ export class TaskStore extends EventEmitter {
       JSON.stringify(
         {
           conversations: this.listConversations().sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
-          tasks: this.listTasks()
+          tasks: this.listTasks(),
+          windowRemarks: Object.fromEntries(this.codexWindowRemarks)
         },
         null,
         2
@@ -444,6 +626,14 @@ function normalizeTitle(title: string | undefined): string {
   return (title ?? "").trim().slice(0, 64);
 }
 
+function normalizeWindowRemark(remark: string | undefined): string {
+  return (remark ?? "").trim().replace(/\s+/g, " ").slice(0, 24);
+}
+
 function codexConversationId(sessionId: string): string {
   return `codex:${sessionId}`;
+}
+
+function getTaskSlotKey(task: TaskRecord): string {
+  return task.refreshWindowId || "default";
 }

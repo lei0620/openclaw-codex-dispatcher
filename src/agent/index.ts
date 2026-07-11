@@ -2,8 +2,10 @@ import os from "node:os";
 import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 import { loadDispatcherConfig } from "../shared/config.js";
-import type { DispatcherServerMessage } from "../shared/types.js";
+import type { AgentClientMessage, DispatcherServerMessage } from "../shared/types.js";
 import type { ProjectConfig } from "../shared/types.js";
+import { CodexAppServerSupervisor } from "./codexAppServerSupervisor.js";
+import { listCodexDesktopWindows } from "./codexWindows.js";
 import { readRecentCodexConversations } from "./codexSessions.js";
 import { discoverProjects } from "./projectDiscovery.js";
 import { runCodexTask } from "./runner.js";
@@ -12,13 +14,18 @@ const config = loadDispatcherConfig();
 const agentId = process.env.OPENCLAW_AGENT_ID ?? os.hostname();
 const dispatcherUrl = process.env.OPENCLAW_DISPATCHER_URL ?? config.server.publicBaseUrl;
 const wsUrl = dispatcherUrl.replace(/^http:/, "ws:").replace(/^https:/, "wss:").replace(/\/$/, "") + "/agents";
+const appServerSupervisor = new CodexAppServerSupervisor(config.codexAppServer);
+appServerSupervisor.start();
 
-let currentAbort: AbortController | undefined;
+const activeTasks = new Map<string, AbortController>();
 let projectScanTimer: NodeJS.Timeout | undefined;
 let codexConversationSyncTimer: NodeJS.Timeout | undefined;
+let codexWindowSyncTimer: NodeJS.Timeout | undefined;
+let heartbeatTimer: NodeJS.Timeout | undefined;
 let lastProjects: ProjectConfig[] = [];
 let lastConversationSignature = "";
-const approvalResolvers = new Map<string, (approved: boolean) => void>();
+let lastWindowSignature = "";
+const approvalResolvers = new Map<string, { taskId: string; resolve: (approved: boolean) => void }>();
 
 connect();
 
@@ -33,6 +40,19 @@ function connect(): void {
     const message = JSON.parse(raw.toString()) as DispatcherServerMessage;
     if (message.type === "agent.accepted") {
       console.log(`agent accepted as ${message.agentId}`);
+      const sendHeartbeat = (): void => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({
+          type: "agent.heartbeat",
+          sentAt: new Date().toISOString(),
+          codex: appServerSupervisor.getStatus()
+        } satisfies AgentClientMessage));
+      };
+      sendHeartbeat();
+      heartbeatTimer = setInterval(
+        sendHeartbeat,
+        config.codexAppServer.heartbeatIntervalMs ?? 10000
+      );
       syncAgentState(ws);
       projectScanTimer = setInterval(() => {
         lastProjects = sendProjects(ws);
@@ -40,30 +60,31 @@ function connect(): void {
       codexConversationSyncTimer = setInterval(() => {
         sendCodexConversations(ws, lastProjects);
       }, Number(process.env.OPENCLAW_CODEX_SYNC_INTERVAL_MS ?? 2500));
+      codexWindowSyncTimer = setInterval(() => {
+        void sendCodexWindows(ws);
+      }, Number(process.env.OPENCLAW_CODEX_WINDOW_SYNC_INTERVAL_MS ?? 2500));
       return;
     }
     if (message.type === "agent.syncCodexSessions") {
       lastProjects = sendProjects(ws);
       sendCodexConversations(ws, lastProjects, true);
+      void sendCodexWindows(ws, true);
       return;
     }
     if (message.type === "task.assigned") {
       void handleTask(ws, message);
       return;
     }
-    if (message.type === "task.cancelled" && currentAbort) {
-      currentAbort.abort();
-      for (const resolve of approvalResolvers.values()) {
-        resolve(false);
-      }
-      approvalResolvers.clear();
+    if (message.type === "task.cancelled") {
+      activeTasks.get(message.taskId)?.abort();
+      resolveApprovalsForTask(message.taskId, false);
       return;
     }
     if (message.type === "task.approval.resolved") {
-      const resolve = approvalResolvers.get(message.approvalId);
-      if (resolve) {
+      const pending = approvalResolvers.get(message.approvalId);
+      if (pending) {
         approvalResolvers.delete(message.approvalId);
-        resolve(message.decision === "approved");
+        pending.resolve(message.decision === "approved");
       }
       return;
     }
@@ -73,10 +94,8 @@ function connect(): void {
   });
 
   ws.on("close", () => {
-    currentAbort?.abort();
-    for (const resolve of approvalResolvers.values()) {
-      resolve(false);
-    }
+    abortAllActiveTasks();
+    resolveAllApprovals(false);
     approvalResolvers.clear();
     if (projectScanTimer) {
       clearInterval(projectScanTimer);
@@ -86,9 +105,17 @@ function connect(): void {
       clearInterval(codexConversationSyncTimer);
       codexConversationSyncTimer = undefined;
     }
+    if (codexWindowSyncTimer) {
+      clearInterval(codexWindowSyncTimer);
+      codexWindowSyncTimer = undefined;
+    }
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = undefined;
+    }
     lastProjects = [];
     lastConversationSignature = "";
-    currentAbort = undefined;
+    lastWindowSignature = "";
     setTimeout(connect, Number(process.env.OPENCLAW_AGENT_RECONNECT_MS ?? 5000));
   });
 
@@ -97,9 +124,17 @@ function connect(): void {
   });
 }
 
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, () => {
+    appServerSupervisor.stop();
+    process.exit(0);
+  });
+}
+
 function syncAgentState(ws: WebSocket): void {
   lastProjects = sendProjects(ws);
   sendCodexConversations(ws, lastProjects, true);
+  void sendCodexWindows(ws, true);
 }
 
 function sendProjects(ws: WebSocket): ProjectConfig[] {
@@ -135,8 +170,32 @@ function sendCodexConversations(ws: WebSocket, projects: ProjectConfig[], force 
   console.log(`reported ${conversations.length} Codex conversations`);
 }
 
+async function sendCodexWindows(ws: WebSocket, force = false): Promise<void> {
+  if (ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  try {
+    const windows = await listCodexDesktopWindows(agentId);
+    const signature = JSON.stringify(windows.map((window) => ({
+      id: window.id,
+      handle: window.handle,
+      processId: window.processId,
+      title: window.title
+    })));
+    if (!force && signature === lastWindowSignature) {
+      return;
+    }
+    lastWindowSignature = signature;
+    ws.send(JSON.stringify({ type: "agent.codexWindows", windows }));
+    console.log(`reported ${windows.length} Codex desktop windows`);
+  } catch (error) {
+    console.error("failed to report Codex desktop windows", error);
+  }
+}
+
 async function handleTask(ws: WebSocket, message: Extract<DispatcherServerMessage, { type: "task.assigned" }>): Promise<void> {
-  currentAbort = new AbortController();
+  const abortController = new AbortController();
+  activeTasks.set(message.task.id, abortController);
   const send = (payload: unknown) => {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(payload));
@@ -150,13 +209,13 @@ async function handleTask(ws: WebSocket, message: Extract<DispatcherServerMessag
       config.desktopInput,
       message.task,
       message.project,
-      currentAbort.signal,
+      abortController.signal,
       (stream, text) => {
         send({ type: "task.log", taskId: message.task.id, stream, text });
       },
       async (approvalMessage) => requestApproval(send, message.task, approvalMessage)
     );
-    if (currentAbort.signal.aborted) {
+    if (abortController.signal.aborted) {
       send({ type: "task.cancelled", taskId: message.task.id, reason: "cancelled by dispatcher" });
     } else if (result.exitCode === 0) {
       send({ type: "task.result", taskId: message.task.id, result });
@@ -168,7 +227,11 @@ async function handleTask(ws: WebSocket, message: Extract<DispatcherServerMessag
   } finally {
     lastProjects = discoverProjects(config.projectDiscovery);
     sendCodexConversations(ws, lastProjects, true);
-    currentAbort = undefined;
+    void sendCodexWindows(ws, true);
+    if (activeTasks.get(message.task.id) === abortController) {
+      activeTasks.delete(message.task.id);
+    }
+    resolveApprovalsForTask(message.task.id, false);
   }
 }
 
@@ -190,6 +253,29 @@ function requestApproval(
     }
   });
   return new Promise((resolve) => {
-    approvalResolvers.set(approvalId, resolve);
+    approvalResolvers.set(approvalId, { taskId: task.id, resolve });
   });
+}
+
+function abortAllActiveTasks(): void {
+  for (const controller of activeTasks.values()) {
+    controller.abort();
+  }
+  activeTasks.clear();
+}
+
+function resolveApprovalsForTask(taskId: string, approved: boolean): void {
+  for (const [approvalId, pending] of approvalResolvers.entries()) {
+    if (pending.taskId !== taskId) {
+      continue;
+    }
+    approvalResolvers.delete(approvalId);
+    pending.resolve(approved);
+  }
+}
+
+function resolveAllApprovals(approved: boolean): void {
+  for (const pending of approvalResolvers.values()) {
+    pending.resolve(approved);
+  }
 }

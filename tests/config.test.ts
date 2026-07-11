@@ -10,6 +10,11 @@ describe("loadDispatcherConfig", () => {
     expect(config.auth.dispatcherToken).toBe("panel-token");
     expect(config.auth.agentToken).toBe("agent-token");
     expect(config.projects.map((project) => project.id)).toEqual(["openclaw", "sjnews"]);
+    expect(config.codexAppServer.turnTimeoutMs).toBe(120000);
+    expect(config.codexAppServer.supervisorIntervalMs).toBe(5000);
+    expect(config.codexAppServer.heartbeatIntervalMs).toBe(10000);
+    expect(config.codexAppServer.refreshDesktopAfterTurn).toBe(false);
+    expect(config.codexAppServer.refreshScriptPath).toBe("scripts/refresh-codex-desktop.ps1");
   });
 
   it("rejects duplicate project ids", () => {

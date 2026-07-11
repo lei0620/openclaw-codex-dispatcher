@@ -1,6 +1,6 @@
 import express from "express";
 import { z } from "zod";
-import type { DispatcherConfig } from "../shared/types.js";
+import type { CodexDesktopWindow, ConversationRecord, DispatcherConfig } from "../shared/types.js";
 import { resolveProject } from "../shared/pathPolicy.js";
 import type { TaskStore } from "./taskStore.js";
 
@@ -27,12 +27,36 @@ const wechatTaskSchema = z.object({
   projectId: z.string().min(1).optional()
 });
 
+const bindRefreshWindowSchema = z.object({
+  refreshWindowId: z.string().optional().default("")
+});
+
+const renameCodexWindowSchema = z.object({
+  windowId: z.string().min(1),
+  remark: z.string().max(40).optional().default("")
+});
+
+const simulateApprovalSchema = z.object({
+  projectId: z.string().min(1),
+  message: z.string().min(1).max(2000).optional()
+});
+
 export function createApiRouter({ config, store }: ApiDeps): express.Router {
   const router = express.Router();
   router.use(requireDispatcherToken(config.auth.dispatcherToken));
 
   router.get("/health", (_req, res) => {
-    res.json({ ok: true, agents: store.listAgents(), queued: store.listTasks().filter((task) => task.status === "queued").length });
+    const agents = store.listAgents();
+    res.json({
+      ok: true,
+      agents,
+      queued: store.listTasks().filter((task) => task.status === "queued").length,
+      services: {
+        nas: { reachable: true },
+        agents: { online: agents.filter((agent) => agent.online).length },
+        codex: { ready: agents.filter((agent) => agent.online && agent.codex?.ready).length }
+      }
+    });
   });
 
   router.get("/projects", (_req, res) => {
@@ -59,6 +83,21 @@ export function createApiRouter({ config, store }: ApiDeps): express.Router {
     res.json({ ok: true, conversations: store.listConversations() });
   });
 
+  router.get("/codex-windows", (_req, res) => {
+    res.json({ windows: store.listCodexWindows() });
+  });
+
+  router.post("/codex-windows/remark", (req, res) => {
+    const body = renameCodexWindowSchema.parse(req.body);
+    try {
+      const window = store.renameCodexWindow(body.windowId, body.remark);
+      res.json({ window, windows: store.listCodexWindows() });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "codex window remark update failed";
+      res.status(message.includes("not found") ? 404 : 400).json({ error: message });
+    }
+  });
+
   router.get("/conversations/:id/tasks", (req, res) => {
     const conversation = store.getConversation(req.params.id);
     if (!conversation) {
@@ -68,6 +107,17 @@ export function createApiRouter({ config, store }: ApiDeps): express.Router {
     res.json({ conversation, tasks: store.listTasks(req.params.id) });
   });
 
+  router.post("/conversations/:id/refresh-window", (req, res) => {
+    const body = bindRefreshWindowSchema.parse(req.body);
+    try {
+      const conversation = store.bindConversationRefreshWindow(req.params.id, body.refreshWindowId);
+      res.json({ conversation });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "conversation refresh window update failed";
+      res.status(message.includes("not found") ? 404 : 400).json({ error: message });
+    }
+  });
+
   router.get("/agents", (_req, res) => {
     res.json({ agents: store.listAgents() });
   });
@@ -75,6 +125,18 @@ export function createApiRouter({ config, store }: ApiDeps): express.Router {
   router.get("/approvals", (req, res) => {
     const status = typeof req.query.status === "string" ? req.query.status : undefined;
     res.json({ approvals: store.listApprovals(status === "pending" || status === "approved" || status === "denied" ? status : undefined) });
+  });
+
+  router.post("/approvals/simulate", (req, res) => {
+    const body = simulateApprovalSchema.parse(req.body);
+    resolveProject(store.listProjects(config.projects), body.projectId);
+    const approval = store.createSimulatedApproval({
+      projectId: body.projectId,
+      message:
+        body.message ??
+        "模拟权限测试：Codex 想运行一条需要你确认的命令。\n\n命令：echo hello\n\n这是测试卡片，批准或拒绝都不会真正执行命令。"
+    });
+    res.status(201).json({ approval });
   });
 
   router.post("/approvals/:id/approve", (req, res) => {
@@ -102,14 +164,20 @@ export function createApiRouter({ config, store }: ApiDeps): express.Router {
   router.post("/tasks", (req, res) => {
     const body = createTaskSchema.parse(req.body);
     const project = resolveProject(store.listProjects(config.projects), body.projectId, body.mode);
+    let conversation: ConversationRecord | undefined;
     if (body.conversationId) {
-      const conversation = store.getConversation(body.conversationId);
+      conversation = store.getConversation(body.conversationId);
       if (!conversation || conversation.projectId !== body.projectId) {
         res.status(400).json({ error: "conversation does not belong to project" });
         return;
       }
     }
     const mode = body.mode ?? project.defaultMode;
+    const windowBindingError = getWindowBindingError(config, store.listCodexWindows(), conversation, mode);
+    if (windowBindingError) {
+      res.status(409).json({ error: windowBindingError });
+      return;
+    }
     const task = store.createTask({ ...body, mode });
     res.status(201).json({ task });
   });
@@ -155,6 +223,36 @@ export function createApiRouter({ config, store }: ApiDeps): express.Router {
   });
 
   return router;
+}
+
+function getWindowBindingError(
+  config: DispatcherConfig,
+  windows: CodexDesktopWindow[],
+  conversation: ConversationRecord | undefined,
+  mode: string
+): string | undefined {
+  if (mode !== "codex" || !config.desktopInput.enabled || !conversation?.codexSessionId) {
+    return undefined;
+  }
+  if (windows.length <= 1 || hasResolvableWindowBinding(conversation.refreshWindowId, windows)) {
+    return undefined;
+  }
+  return "当前电脑打开了多个 Codex 窗口，请先给这个对话绑定一个电脑窗口，再发送，避免发到错误窗口。";
+}
+
+function hasResolvableWindowBinding(refreshWindowId: string | undefined, windows: CodexDesktopWindow[]): boolean {
+  const normalized = (refreshWindowId ?? "").trim();
+  if (!normalized) {
+    return false;
+  }
+  if (windows.some((window) => window.id === normalized)) {
+    return true;
+  }
+  const pidMatch = normalized.match(/:pid:(\d+)$/);
+  if (!pidMatch) {
+    return false;
+  }
+  return windows.filter((window) => String(window.processId) === pidMatch[1]).length === 1;
 }
 
 function requireDispatcherToken(token: string): express.RequestHandler {

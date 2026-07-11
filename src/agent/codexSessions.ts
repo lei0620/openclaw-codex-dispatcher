@@ -20,6 +20,9 @@ interface ParsedSession {
 
 const codexConversationLimit = Number(process.env.OPENCLAW_CODEX_CONVERSATION_LIMIT ?? 3);
 const maxSessionFiles = Number(process.env.OPENCLAW_CODEX_SESSION_SCAN_MAX ?? 150);
+const defaultFullReadMaxBytes = 16 * 1024 * 1024;
+const defaultLargeFileHeadBytes = 1024 * 1024;
+const defaultLargeFileTailBytes = 8 * 1024 * 1024;
 
 export function readRecentCodexConversations(projects: ProjectConfig[]): SyncedCodexConversation[] {
   const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
@@ -108,7 +111,7 @@ function parseSessionFile(filePath: string, index: Map<string, IndexedSession>):
   let cwd = "";
   let fallbackTimestamp = fs.statSync(filePath).mtime.toISOString();
 
-  for (const line of fs.readFileSync(filePath, "utf8").split(/\r?\n/)) {
+  for (const line of readSessionFileForConversationSync(filePath).split(/\r?\n/)) {
     if (!line.includes('"session_meta"') && !line.includes('"role":"user"') && !line.includes('"role":"assistant"')) {
       continue;
     }
@@ -156,6 +159,41 @@ function parseSessionFile(filePath: string, index: Map<string, IndexedSession>):
     updatedAt: indexed?.updated_at ?? fallbackTimestamp,
     messages: selectRecentConversationMessages(messages)
   };
+}
+
+function readSessionFileForConversationSync(filePath: string): string {
+  const stat = fs.statSync(filePath);
+  const maxFullReadBytes = readPositiveIntEnv("OPENCLAW_CODEX_SESSION_FULL_READ_MAX_BYTES", defaultFullReadMaxBytes);
+  if (stat.size <= maxFullReadBytes) {
+    return fs.readFileSync(filePath, "utf8");
+  }
+
+  const headBytes = Math.min(
+    readPositiveIntEnv("OPENCLAW_CODEX_SESSION_HEAD_BYTES", defaultLargeFileHeadBytes),
+    stat.size
+  );
+  const tailBytes = Math.min(
+    readPositiveIntEnv("OPENCLAW_CODEX_SESSION_TAIL_BYTES", defaultLargeFileTailBytes),
+    Math.max(0, stat.size - headBytes)
+  );
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const head = Buffer.alloc(headBytes);
+    fs.readSync(fd, head, 0, headBytes, 0);
+    if (tailBytes <= 0) {
+      return head.toString("utf8");
+    }
+    const tail = Buffer.alloc(tailBytes);
+    fs.readSync(fd, tail, 0, tailBytes, stat.size - tailBytes);
+    return `${head.toString("utf8")}\n${tail.toString("utf8")}`;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 }
 
 export function selectRecentConversationMessages(messages: ConversationMessage[]): ConversationMessage[] {

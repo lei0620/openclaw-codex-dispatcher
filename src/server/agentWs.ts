@@ -13,6 +13,11 @@ interface AgentWsDeps {
 export function attachAgentWebSocketServer({ server, config, store }: AgentWsDeps): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
   const agents = new Map<string, WebSocket>();
+  const staleAgentTimer = setInterval(() => store.markStaleAgentsOffline(30000), 10000);
+  staleAgentTimer.unref();
+  const clearStaleAgentTimer = () => clearInterval(staleAgentTimer);
+  wss.once("close", clearStaleAgentTimer);
+  server.once("close", clearStaleAgentTimer);
 
   server.on("upgrade", (request, socket, head) => {
     if (!request.url?.startsWith("/agents")) {
@@ -64,6 +69,13 @@ export function attachAgentWebSocketServer({ server, config, store }: AgentWsDep
         return;
       }
       agentId = message.agentId;
+      const previous = agents.get(agentId);
+      if (previous && previous.readyState === WebSocket.OPEN) {
+        send(ws, { type: "error", message: `agent already connected: ${agentId}` });
+        ws.close(1013, "agent already connected");
+        return;
+      }
+      store.stopActiveTasksForAgent(agentId, "电脑代理已重新连接，旧任务已中断，请重新发送。");
       agents.set(agentId, ws);
       store.upsertAgent(agentId);
       send(ws, { type: "agent.accepted", agentId });
@@ -79,8 +91,10 @@ export function attachAgentWebSocketServer({ server, config, store }: AgentWsDep
         return;
       }
       store.stopActiveTasksForAgent(agentId);
-      agents.delete(agentId);
-      store.markAgentOffline(agentId);
+      if (agents.get(agentId) === ws) {
+        agents.delete(agentId);
+        store.markAgentOffline(agentId);
+      }
     });
   });
 
@@ -97,6 +111,11 @@ function handleAgentMessage(
   if (!message) {
     return;
   }
+  if (message.type === "agent.heartbeat") {
+    store.heartbeatAgent(agentId, message.codex);
+    assignQueuedTasks(config, store, agents);
+    return;
+  }
   store.upsertAgent(agentId);
   if (message.type === "task.log") {
     store.appendLog(message.taskId, message.stream, message.text);
@@ -109,6 +128,9 @@ function handleAgentMessage(
   }
   if (message.type === "agent.codexConversations") {
     store.upsertCodexConversations(message.conversations);
+  }
+  if (message.type === "agent.codexWindows") {
+    store.setAgentCodexWindows(agentId, message.windows);
   }
   if (message.type === "task.result") {
     store.completeTask(message.taskId, message.result);
@@ -126,20 +148,22 @@ function handleAgentMessage(
 
 function assignQueuedTasks(config: DispatcherConfig, store: TaskStore, agents: Map<string, WebSocket>): void {
   for (const [agentId, ws] of agents.entries()) {
-    if (ws.readyState !== WebSocket.OPEN) {
+    if (ws.readyState !== WebSocket.OPEN || !store.isAgentReady(agentId)) {
       continue;
     }
-    const task = store.assignNextTask(agentId);
-    if (!task) {
-      return;
+    while (ws.readyState === WebSocket.OPEN) {
+      const task = store.assignNextTask(agentId);
+      if (!task) {
+        break;
+      }
+      const project = resolveProject(store.listProjects(config.projects), task.projectId, task.mode);
+      send(ws, {
+        type: "task.assigned",
+        task,
+        project: project satisfies ProjectConfig,
+        codex: config.codex
+      });
     }
-    const project = resolveProject(store.listProjects(config.projects), task.projectId, task.mode);
-    send(ws, {
-      type: "task.assigned",
-      task,
-      project: project satisfies ProjectConfig,
-      codex: config.codex
-    });
   }
 }
 

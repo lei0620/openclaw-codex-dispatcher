@@ -32,8 +32,9 @@ const config: DispatcherConfig = {
   codexAppServer: {
     enabled: false,
     url: "ws://127.0.0.1:8765",
-    startupTimeoutMs: 8000,
-    requestTimeoutMs: 30000
+    startupTimeoutMs: 60000,
+    requestTimeoutMs: 30000,
+    turnTimeoutMs: 120000
   },
   desktopInput: {
     enabled: false,

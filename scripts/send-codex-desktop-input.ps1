@@ -1,7 +1,9 @@
 param(
   [string]$PromptFile = "",
   [int]$ClickYOffset = 92,
-  [string]$WindowTitlePattern = "Codex|OpenAI"
+  [string]$WindowTitlePattern = "Codex|OpenAI",
+  [string]$WindowProcessId = "",
+  [string]$WindowHandle = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -75,7 +77,7 @@ if ([string]::IsNullOrWhiteSpace($text)) {
   throw "No prompt text was provided."
 }
 
-function Set-CodexForeground([IntPtr]$targetHandle) {
+function Set-CodexForeground([IntPtr]$targetHandle, [bool]$requireExactHandle) {
   [uint32]$targetProcessId = 0
   $targetThreadId = [OpenClawWin32]::GetWindowThreadProcessId($targetHandle, [ref]$targetProcessId)
   $currentThreadId = [OpenClawWin32]::GetCurrentThreadId()
@@ -108,16 +110,19 @@ function Set-CodexForeground([IntPtr]$targetHandle) {
       }
     }
     Start-Sleep -Milliseconds 220
-    if (Test-WindowForeground $targetHandle) {
+    if (Test-WindowForeground $targetHandle $requireExactHandle) {
       return
     }
   }
 }
 
-function Test-WindowForeground([IntPtr]$targetHandle) {
+function Test-WindowForeground([IntPtr]$targetHandle, [bool]$requireExactHandle) {
   $foregroundHandle = [OpenClawWin32]::GetForegroundWindow()
   if ($foregroundHandle -eq $targetHandle) {
     return $true
+  }
+  if ($requireExactHandle) {
+    return $false
   }
 
   [uint32]$targetProcessId = 0
@@ -145,24 +150,34 @@ function Send-KeyCombo([byte[]]$keys) {
   }
 }
 
-$processes = Get-Process |
+$processes = @(Get-Process |
   Where-Object {
     $_.MainWindowHandle -ne 0 -and
-    (
-      $_.ProcessName -ieq "Codex" -or
-      (
-        $_.Path -and
-        $_.Path -match "\\OpenAI\.Codex_.*\\app\\Codex\.exe$"
-      ) -or
-      (
-        $_.ProcessName -match "OpenAI" -and
-        $_.MainWindowTitle -match $WindowTitlePattern
-      )
-    )
+    $_.Path -and
+    $_.Path -match "\\OpenAI\.Codex_[^\\]+\\app\\(ChatGPT|Codex)\.exe$"
   } |
-  Sort-Object @{ Expression = { $_.ProcessName -ieq "Codex" }; Descending = $true }, StartTime -Descending
+  Sort-Object StartTime -Descending)
 
-$target = $processes | Select-Object -First 1
+$target = $null
+if ($WindowProcessId.Trim()) {
+  $targetProcessIdValue = [Int32]$WindowProcessId.Trim()
+  $target = $processes | Where-Object { $_.Id -eq $targetProcessIdValue } | Select-Object -First 1
+  if (-not $target) {
+    throw "Bound Codex desktop window was not found: pid=$WindowProcessId"
+  }
+} elseif ($WindowHandle.Trim()) {
+  $targetHandleValue = [Int64]$WindowHandle.Trim()
+  $target = $processes | Where-Object { $_.MainWindowHandle.ToInt64() -eq $targetHandleValue } | Select-Object -First 1
+  if (-not $target) {
+    throw "Bound Codex desktop window was not found: handle=$WindowHandle"
+  }
+} else {
+  if ($processes.Count -gt 1) {
+    $titles = ($processes | ForEach-Object { "pid=$($_.Id), title=$($_.MainWindowTitle)" }) -join "; "
+    throw "Multiple Codex desktop windows are visible; bind a window before using desktop input: $titles"
+  }
+  $target = $processes | Select-Object -First 1
+}
 if (-not $target) {
   throw "No visible Codex desktop window was found."
 }
@@ -170,8 +185,9 @@ if (-not $target) {
 $handle = [IntPtr]$target.MainWindowHandle
 [OpenClawWin32]::ShowWindow($handle, 9) | Out-Null
 Start-Sleep -Milliseconds 120
-Set-CodexForeground $handle
-if (-not (Test-WindowForeground $handle)) {
+$requireExactHandle = [bool]$WindowHandle.Trim()
+Set-CodexForeground $handle $requireExactHandle
+if (-not (Test-WindowForeground $handle $requireExactHandle)) {
   throw "Failed to focus Codex desktop window."
 }
 

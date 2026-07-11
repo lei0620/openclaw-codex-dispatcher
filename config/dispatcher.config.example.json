@@ -40,13 +40,20 @@
     "promptStdin": false
   },
   "codexAppServer": {
-    "enabled": false,
+    "enabled": true,
     "url": "ws://127.0.0.1:18765",
-    "startupTimeoutMs": 8000,
-    "requestTimeoutMs": 30000
+    "startupTimeoutMs": 60000,
+    "requestTimeoutMs": 30000,
+    "turnTimeoutMs": 120000,
+    "supervisorIntervalMs": 5000,
+    "heartbeatIntervalMs": 10000,
+    "refreshDesktopAfterTurn": false,
+    "refreshScriptPath": "scripts/refresh-codex-desktop.ps1",
+    "refreshWindowTitlePattern": "Codex|OpenAI",
+    "refreshTimeoutMs": 8000
   },
   "desktopInput": {
-    "enabled": true,
+    "enabled": false,
     "allowUnsafeForegroundRouting": false,
     "scriptPath": "scripts/send-codex-desktop-input.ps1",
     "clickYOffset": 92,

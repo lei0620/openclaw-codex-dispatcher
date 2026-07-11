@@ -49,6 +49,15 @@ export function selectCodexExecutionPlan(
   if (task.mode !== "codex") {
     return ["cli"];
   }
+  if (isDesktopSyncedTask(task)) {
+    return appServer.enabled ? ["app-server"] : [];
+  }
+  if (task.source === "panel" && appServer.enabled) {
+    return ["app-server"];
+  }
+  if (task.refreshWindowId && desktopInput.enabled) {
+    return ["desktop-input"];
+  }
   const plan: CodexExecutionStrategy[] = [];
   if (appServer.enabled) {
     plan.push("app-server");
@@ -76,7 +85,11 @@ export async function runCodexTask(
   }
 
   const codexSessionId = getCodexSessionId(task);
+  const requiresAppServer = isDesktopSyncedTask(task) || isPhoneConversationTask(task);
   const plan = selectCodexExecutionPlan(appServer, desktopInput, task);
+  if (plan.length === 0) {
+    return desktopAppServerUnavailableResult("Codex desktop app-server is not enabled for this synced desktop session.");
+  }
   for (const strategy of plan) {
     if (strategy === "app-server") {
       try {
@@ -85,6 +98,11 @@ export async function runCodexTask(
       } catch (error) {
         if (signal.aborted) {
           return { exitCode: 1, summary: "Cancelled by request.", diffSummary: "not checked" };
+        }
+        if (requiresAppServer) {
+          const message = `Codex desktop app-server unavailable: ${error instanceof Error ? error.message : String(error)}`;
+          onLog("system", `${message}\n`);
+          return desktopAppServerUnavailableResult(message);
         }
         onLog(
           "system",
@@ -110,7 +128,18 @@ export async function runCodexTask(
     return await runCodexCliTask(codex, codexSessionId, task, project, signal, onLog, onApproval);
   }
 
+  if (requiresAppServer) {
+    return desktopAppServerUnavailableResult("Codex desktop app-server unavailable.");
+  }
   return await runCodexCliTask(codex, codexSessionId, task, project, signal, onLog, onApproval);
+}
+
+function desktopAppServerUnavailableResult(summary: string): TaskResult {
+  return {
+    exitCode: 1,
+    summary,
+    diffSummary: "not checked"
+  };
 }
 
 async function runCodexCliTask(
@@ -210,6 +239,14 @@ function getCodexSessionId(task: TaskRecord): string | undefined {
     return task.codexSessionId;
   }
   return task.conversationId?.startsWith(prefix) ? task.conversationId.slice(prefix.length) : undefined;
+}
+
+function isDesktopSyncedTask(task: TaskRecord): boolean {
+  return Boolean(getCodexSessionId(task));
+}
+
+function isPhoneConversationTask(task: TaskRecord): boolean {
+  return task.source === "panel" && Boolean(task.conversationId);
 }
 
 function applyCodexResumeArgs(args: string[], sessionId: string, prompt: string): void {

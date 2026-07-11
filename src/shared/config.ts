@@ -56,14 +56,28 @@ const configSchema = z.object({
       enabled: z.boolean().default(false),
       url: z.string().url().default("ws://127.0.0.1:18765"),
       command: z.string().min(1).optional(),
-      startupTimeoutMs: z.coerce.number().int().positive().default(8000),
-      requestTimeoutMs: z.coerce.number().int().positive().default(30000)
+      startupTimeoutMs: z.coerce.number().int().positive().default(60000),
+      requestTimeoutMs: z.coerce.number().int().positive().default(30000),
+      turnTimeoutMs: z.coerce.number().int().positive().default(120000),
+      supervisorIntervalMs: z.coerce.number().int().positive().default(5000),
+      heartbeatIntervalMs: z.coerce.number().int().positive().default(10000),
+      refreshDesktopAfterTurn: z.boolean().default(false),
+      refreshScriptPath: z.string().min(1).default("scripts/refresh-codex-desktop.ps1"),
+      refreshWindowTitlePattern: z.string().min(1).default("Codex|OpenAI"),
+      refreshTimeoutMs: z.coerce.number().int().positive().default(8000)
     })
     .default({
       enabled: false,
       url: "ws://127.0.0.1:18765",
-      startupTimeoutMs: 8000,
-      requestTimeoutMs: 30000
+      startupTimeoutMs: 60000,
+      requestTimeoutMs: 30000,
+      turnTimeoutMs: 120000,
+      supervisorIntervalMs: 5000,
+      heartbeatIntervalMs: 10000,
+      refreshDesktopAfterTurn: false,
+      refreshScriptPath: "scripts/refresh-codex-desktop.ps1",
+      refreshWindowTitlePattern: "Codex|OpenAI",
+      refreshTimeoutMs: 8000
     }),
   desktopInput: z
     .object({
@@ -129,7 +143,27 @@ export function loadDispatcherConfig(configPath = process.env.OPENCLAW_CONFIG ??
         : parsed.codexAppServer.startupTimeoutMs,
       requestTimeoutMs: process.env.CODEX_APP_SERVER_REQUEST_TIMEOUT_MS
         ? Number(process.env.CODEX_APP_SERVER_REQUEST_TIMEOUT_MS)
-        : parsed.codexAppServer.requestTimeoutMs
+        : parsed.codexAppServer.requestTimeoutMs,
+      turnTimeoutMs: process.env.CODEX_APP_SERVER_TURN_TIMEOUT_MS
+        ? Number(process.env.CODEX_APP_SERVER_TURN_TIMEOUT_MS)
+        : parsed.codexAppServer.turnTimeoutMs,
+      supervisorIntervalMs: process.env.CODEX_APP_SERVER_SUPERVISOR_INTERVAL_MS
+        ? Number(process.env.CODEX_APP_SERVER_SUPERVISOR_INTERVAL_MS)
+        : parsed.codexAppServer.supervisorIntervalMs,
+      heartbeatIntervalMs: process.env.CODEX_APP_SERVER_HEARTBEAT_INTERVAL_MS
+        ? Number(process.env.CODEX_APP_SERVER_HEARTBEAT_INTERVAL_MS)
+        : parsed.codexAppServer.heartbeatIntervalMs,
+      refreshDesktopAfterTurn: process.env.CODEX_APP_SERVER_REFRESH_DESKTOP_AFTER_TURN
+        ? process.env.CODEX_APP_SERVER_REFRESH_DESKTOP_AFTER_TURN === "1" ||
+          process.env.CODEX_APP_SERVER_REFRESH_DESKTOP_AFTER_TURN.toLowerCase() === "true"
+        : parsed.codexAppServer.refreshDesktopAfterTurn,
+      refreshScriptPath: process.env.CODEX_APP_SERVER_REFRESH_SCRIPT ?? parsed.codexAppServer.refreshScriptPath,
+      refreshWindowTitlePattern:
+        process.env.CODEX_APP_SERVER_REFRESH_WINDOW_TITLE_PATTERN ??
+        parsed.codexAppServer.refreshWindowTitlePattern,
+      refreshTimeoutMs: process.env.CODEX_APP_SERVER_REFRESH_TIMEOUT_MS
+        ? Number(process.env.CODEX_APP_SERVER_REFRESH_TIMEOUT_MS)
+        : parsed.codexAppServer.refreshTimeoutMs
     },
     desktopInput: {
       enabled: process.env.CODEX_DESKTOP_INPUT_ENABLED

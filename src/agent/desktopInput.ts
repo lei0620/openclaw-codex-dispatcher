@@ -10,6 +10,11 @@ interface SessionReply {
   text: string;
 }
 
+interface DesktopWindowTarget {
+  handle?: string;
+  processId?: string;
+}
+
 export async function runDesktopInputTask(
   config: DesktopInputConfig,
   task: TaskRecord,
@@ -23,14 +28,20 @@ export async function runDesktopInputTask(
 
   const startedAt = Date.now();
   onLog("system", "desktop input: sending prompt to the visible Codex window\n");
-  await sendPromptToCodexDesktop(config, task.prompt, signal, onLog);
+  await sendPromptToCodexDesktop(config, task.prompt, task.refreshWindowId, signal, onLog);
 
   if (signal.aborted) {
     return { exitCode: 1, summary: "Cancelled by request.", diffSummary: "not checked" };
   }
 
   onLog("system", "desktop input: waiting for the desktop Codex reply\n");
-  const reply = await waitForDesktopReply(task.prompt, startedAt, config.responseTimeoutMs, signal);
+  const reply = await waitForDesktopReply(
+    task.prompt,
+    startedAt,
+    config.responseTimeoutMs,
+    signal,
+    task.codexSessionId
+  );
   if (!reply) {
     return {
       exitCode: 0,
@@ -44,13 +55,14 @@ export async function runDesktopInputTask(
     exitCode: 0,
     summary: reply.text,
     diffSummary: "not checked",
-    codexSessionId: reply.sessionId ?? task.codexSessionId
+    codexSessionId: task.codexSessionId ?? reply.sessionId
   };
 }
 
 async function sendPromptToCodexDesktop(
   config: DesktopInputConfig,
   prompt: string,
+  refreshWindowId: string | undefined,
   signal: AbortSignal,
   onLog: (stream: TaskLogStream, text: string) => void
 ): Promise<void> {
@@ -60,20 +72,7 @@ async function sendPromptToCodexDesktop(
     const scriptPath = path.resolve(config.scriptPath);
     const child = spawn(
       "powershell.exe",
-      [
-        "-Sta",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        scriptPath,
-        "-PromptFile",
-        promptFile,
-        "-ClickYOffset",
-        String(config.clickYOffset),
-        "-WindowTitlePattern",
-        config.windowTitlePattern
-      ],
+      buildDesktopInputScriptArgs(scriptPath, promptFile, config, refreshWindowId),
       {
         windowsHide: true,
         stdio: ["pipe", "pipe", "pipe"]
@@ -112,18 +111,64 @@ async function sendPromptToCodexDesktop(
   });
 }
 
+export function buildDesktopInputScriptArgs(
+  scriptPath: string,
+  promptFile: string,
+  config: DesktopInputConfig,
+  refreshWindowId?: string
+): string[] {
+  const args = [
+    "-Sta",
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    scriptPath,
+    "-PromptFile",
+    promptFile,
+    "-ClickYOffset",
+    String(config.clickYOffset),
+    "-WindowTitlePattern",
+    config.windowTitlePattern
+  ];
+  const target = parseDesktopWindowTarget(refreshWindowId);
+  if (target.processId) {
+    args.push("-WindowProcessId", target.processId);
+  }
+  if (target.handle) {
+    args.push("-WindowHandle", target.handle);
+  }
+  return args;
+}
+
+export function parseDesktopWindowTarget(refreshWindowId: string | undefined): DesktopWindowTarget {
+  if (!refreshWindowId) {
+    return {};
+  }
+  const parts = refreshWindowId.split(":");
+  const last = parts.at(-1)?.trim();
+  if (!last) {
+    return {};
+  }
+  if (parts.at(-2) === "pid") {
+    return { processId: last };
+  }
+  return { handle: last };
+}
+
 async function waitForDesktopReply(
   prompt: string,
   startedAt: number,
   timeoutMs: number,
-  signal: AbortSignal
+  signal: AbortSignal,
+  expectedSessionId?: string
 ): Promise<SessionReply | undefined> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (signal.aborted) {
       return undefined;
     }
-    const reply = findReplyAfterPrompt(prompt, startedAt - 2000);
+    const reply = findReplyAfterPrompt(prompt, startedAt - 2000, expectedSessionId);
     if (reply) {
       return reply;
     }
@@ -132,7 +177,11 @@ async function waitForDesktopReply(
   return undefined;
 }
 
-function findReplyAfterPrompt(prompt: string, sinceMs: number): SessionReply | undefined {
+export function findReplyAfterPrompt(
+  prompt: string,
+  sinceMs: number,
+  expectedSessionId?: string
+): SessionReply | undefined {
   const root = path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "sessions");
   if (!fs.existsSync(root)) {
     return undefined;
@@ -140,12 +189,35 @@ function findReplyAfterPrompt(prompt: string, sinceMs: number): SessionReply | u
 
   const files = listRecentSessionFiles(root, sinceMs).slice(0, 80);
   for (const file of files) {
+    if (expectedSessionId && !sessionFileMatches(file.fullPath, expectedSessionId)) {
+      continue;
+    }
     const reply = parseSessionReply(file.fullPath, prompt, sinceMs);
     if (reply) {
       return reply;
     }
   }
   return undefined;
+}
+
+function sessionFileMatches(filePath: string, expectedSessionId: string): boolean {
+  if (sessionIdFromFileName(filePath) === expectedSessionId) {
+    return true;
+  }
+  for (const line of fs.readFileSync(filePath, "utf8").split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const item = JSON.parse(line);
+      if (item.type === "session_meta" && item.payload?.id === expectedSessionId) {
+        return true;
+      }
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 function listRecentSessionFiles(root: string, sinceMs: number): Array<{ fullPath: string; mtimeMs: number }> {
