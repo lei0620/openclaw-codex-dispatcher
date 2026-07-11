@@ -190,6 +190,38 @@ describe("selectRecentConversationMessages", () => {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  it("preserves commentary and final-answer phases during desktop conversation sync", () => {
+    const previousCodexHome = process.env.CODEX_HOME;
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-home-"));
+    try {
+      process.env.CODEX_HOME = tmp;
+      const projectPath = path.join(tmp, "project");
+      const sessionsDir = path.join(tmp, "sessions", "2026", "07", "11");
+      fs.mkdirSync(projectPath, { recursive: true });
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      const sessionId = "019f5a2e-8ef8-7e70-9508-b642b03da103";
+      const lines = [
+        { type: "session_meta", payload: { id: sessionId, cwd: projectPath, timestamp: "2026-07-11T10:00:00.000Z" } },
+        { type: "response_item", timestamp: "2026-07-11T10:00:00.000Z", payload: { type: "message", role: "user", content: [{ text: "检查" }] } },
+        { type: "response_item", timestamp: "2026-07-11T10:00:01.000Z", payload: { type: "message", role: "assistant", phase: "commentary", content: [{ text: "正在检查" }] } },
+        { type: "response_item", timestamp: "2026-07-11T10:00:02.000Z", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ text: "检查完成" }] } }
+      ];
+      fs.writeFileSync(path.join(sessionsDir, `rollout-${sessionId}.jsonl`), lines.map((line) => JSON.stringify(line)).join("\n"));
+      const projects: ProjectConfig[] = [{
+        id: "demo", name: "Demo", path: projectPath, defaultMode: "codex", allowedModes: ["codex"], notify: true
+      }];
+
+      expect(readRecentCodexConversations(projects)[0].messages).toMatchObject([
+        { role: "user", text: "检查" },
+        { role: "assistant", phase: "commentary", text: "正在检查" },
+        { role: "assistant", phase: "final_answer", text: "检查完成" }
+      ]);
+    } finally {
+      restoreEnv("CODEX_HOME", previousCodexHome);
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 function writeSessionFile(

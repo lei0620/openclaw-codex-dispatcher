@@ -89,7 +89,7 @@ function mergeConversationMessages(current: ConversationMessage[], incoming: Con
   const messages: ConversationMessage[] = [];
   const keys = new Set<string>();
   for (const message of [...current, ...incoming].sort(compareConversationMessages)) {
-    const key = `${message.role}\u0000${message.at}\u0000${message.text}`;
+    const key = `${message.role}\u0000${message.phase ?? ""}\u0000${message.at}\u0000${message.text}`;
     if (keys.has(key)) {
       continue;
     }
@@ -168,7 +168,10 @@ function parseSessionFile(filePath: string, index: Map<string, IndexedSession>):
           messages.push({
             role,
             text: trimMessage(text),
-            at: fallbackTimestamp
+            at: fallbackTimestamp,
+            ...(role === "assistant" && (item.payload.phase === "commentary" || item.payload.phase === "final_answer")
+              ? { phase: item.payload.phase }
+              : {})
           });
         }
       }

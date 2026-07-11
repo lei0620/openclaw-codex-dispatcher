@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import vm from "node:vm";
 import { describe, expect, it } from "vitest";
+import { groupConversationMessages } from "../public/conversationPresentation.js";
 
 describe("mobile panel timeline", () => {
   it("does not duplicate a phone prompt that already appears in synced Codex history", () => {
@@ -77,10 +78,13 @@ function loadRenderTimeline(): (historyMessages: unknown[], tasks: unknown[], pr
     "renderTimeline",
     "compareTimelineItems",
     "renderHistoryMessage",
+    "renderHistoryProcess",
+    "renderProcessDetails",
     "renderUserMessage",
     "isTaskPromptInHistory",
     "normalizeComparableMessageText",
     "matchTasksToHistory",
+    "isFinalAssistantMessage",
     "isActiveTimelineTask",
     "dedupeTimelineHistoryMessages",
     "isLikelyDuplicateHistoryMessage",
@@ -88,6 +92,7 @@ function loadRenderTimeline(): (historyMessages: unknown[], tasks: unknown[], pr
   ];
   const code = functionNames.map((name) => extractFunction(source, name)).join("\n");
   const sandbox = {
+    groupConversationMessages,
     escapeHtml: (value: unknown) => String(value ?? ""),
     sanitizeDisplayText: (value: unknown) => String(value ?? ""),
     renderCodexMessage: () => '<article class="message codex-message"></article>',

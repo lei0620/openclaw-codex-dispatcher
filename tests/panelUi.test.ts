@@ -109,6 +109,18 @@ describe("mobile panel copy", () => {
     expect(css).toContain(".task-details");
   });
 
+  it("folds desktop commentary under the final Codex answer", () => {
+    const js = fs.readFileSync("public/app.js", "utf8");
+    const css = fs.readFileSync("public/styles.css", "utf8");
+
+    expect(js).toContain('from "/conversationPresentation.js"');
+    expect(js).toContain("groupConversationMessages");
+    expect(js).toContain("renderProcessDetails");
+    expect(js).toContain('completed ? "已处理" : "正在处理"');
+    expect(css).toContain(".process-details");
+    expect(css).toContain(".process-content");
+  });
+
   it("renders phone user messages as compact desktop-style grey bubbles", () => {
     const css = fs.readFileSync("public/styles.css", "utf8");
 

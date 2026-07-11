@@ -9,12 +9,13 @@ import { buildApiBaseCandidates, isFailoverSafeRequest } from "/apiBaseFailover.
 import { createRealtimeRenderScheduler } from "/realtimeRenderScheduler.js";
 import { deriveRecentProjects, deriveRunningConversations } from "/sidebarPriority.js";
 import { createTaskStatusWatcher } from "/taskStatusWatcher.js";
+import { groupConversationMessages } from "/conversationPresentation.js";
 
 const lanApiBase = "http://192.168.101.8:1314";
 const vpnApiBase = "http://100.69.253.5:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.9.8";
-const releaseNotes = "手机发送后立即刷新绑定的电脑 Codex 会话；为每条手机任务增加独立状态追踪，避免完成后仍停留在执行中。";
+const appVersion = "1.9.9";
+const releaseNotes = "手机聊天与桌面端一致：处理过程默认折叠，最终答案单独显示；未完成时仍可展开查看实时进度。";
 let token = defaultDispatcherToken;
 let apiBase = defaultApiBase();
 
@@ -1696,11 +1697,14 @@ function renderTimeline(historyMessages, tasks, prefixHtml) {
   const timelineHistoryMessages = dedupeTimelineHistoryMessages(historyMessages);
   const historyMatches = matchTasksToHistory(tasks, timelineHistoryMessages);
   const items = [];
-  timelineHistoryMessages.forEach((message, index) => {
+  groupConversationMessages(timelineHistoryMessages).forEach((entry, index) => {
+    const message = entry.type === "message" ? entry.message : entry.process.at(-1);
     items.push({
-      at: message.at,
+      at: message?.at,
       order: index,
-      html: renderHistoryMessage(message)
+      html: entry.type === "message"
+        ? renderHistoryMessage(entry.message, entry.process)
+        : renderHistoryProcess(entry.process)
     });
   });
 
@@ -1776,7 +1780,7 @@ function matchTasksToHistory(tasks, messages) {
     const turnEnd = nextUserIndex >= 0 ? nextUserIndex : messages.length;
     matches.set(task.id, {
       userIndex: selected.index,
-      hasAssistant: messages.slice(selected.index + 1, turnEnd).some((message) => message.role === "assistant")
+      hasAssistant: messages.slice(selected.index + 1, turnEnd).some(isFinalAssistantMessage)
     });
   }
   return matches;
@@ -1832,7 +1836,11 @@ function compareTimelineItems(left, right) {
   return left.order - right.order;
 }
 
-function renderHistoryMessage(message) {
+function isFinalAssistantMessage(message) {
+  return message.role === "assistant" && message.phase !== "commentary";
+}
+
+function renderHistoryMessage(message, process = []) {
   const isUser = message.role === "user";
   const text = sanitizeDisplayText(message.text);
   return `
@@ -1840,8 +1848,34 @@ function renderHistoryMessage(message) {
       <div class="bubble">
         ${isUser ? "" : `<div class="message-name">Codex</div>`}
         <div class="message-text">${escapeHtml(text)}</div>
+        ${isUser ? "" : renderProcessDetails(process, true)}
       </div>
     </article>
+  `;
+}
+
+function renderHistoryProcess(process) {
+  return `
+    <article class="message codex-message process-message">
+      <div class="bubble">
+        <div class="message-name">Codex</div>
+        ${renderProcessDetails(process, false)}
+      </div>
+    </article>
+  `;
+}
+
+function renderProcessDetails(process, completed) {
+  if (!process?.length) {
+    return "";
+  }
+  return `
+    <details class="process-details" ${completed ? "" : "open"}>
+      <summary>${completed ? "已处理" : "正在处理"}</summary>
+      <div class="process-content">
+        ${process.map((message) => `<p>${escapeHtml(sanitizeDisplayText(message.text))}</p>`).join("")}
+      </div>
+    </details>
   `;
 }
 

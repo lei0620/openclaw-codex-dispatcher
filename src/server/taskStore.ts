@@ -932,7 +932,7 @@ function mergeSyncedConversationMessages(
     return Number.isFinite(leftTime) && Number.isFinite(rightTime) ? leftTime - rightTime : 0;
   });
   for (const message of ordered) {
-    const key = `${message.role}\u0000${message.at}\u0000${message.text}`;
+    const key = `${message.role}\u0000${message.phase ?? ""}\u0000${message.at}\u0000${message.text}`;
     if (keys.has(key)) {
       continue;
     }

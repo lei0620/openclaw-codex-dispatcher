@@ -186,6 +186,7 @@ export interface ConversationMessage {
   role: "user" | "assistant";
   text: string;
   at: string;
+  phase?: "commentary" | "final_answer";
 }
 
 export interface SyncedCodexConversation {
