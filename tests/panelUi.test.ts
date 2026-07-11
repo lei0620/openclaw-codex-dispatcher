@@ -36,6 +36,36 @@ describe("mobile panel copy", () => {
     expect(js).toContain("data-conversation-id");
   });
 
+  it("uses a fixed Codex brand and generated icons for every topbar control", () => {
+    const html = fs.readFileSync("public/index.html", "utf8");
+    const js = fs.readFileSync("public/app.js", "utf8");
+    const css = fs.readFileSync("public/styles.css", "utf8");
+
+    expect(html).toContain('<h2 id="current-project-name">Codex</h2>');
+    for (const name of ["menu", "window", "device", "sync", "approval", "settings"]) {
+      expect(html).toContain(`src="/icons/${name}.png"`);
+    }
+    expect(js).toContain('els.currentProjectName.textContent = "Codex"');
+    expect(css).toContain(".topbar-icon");
+    expect(css).toContain("--control-accent: #16846b");
+  });
+
+  it("prioritizes running conversations and three recent projects in the sidebar", () => {
+    const js = fs.readFileSync("public/app.js", "utf8");
+    const css = fs.readFileSync("public/styles.css", "utf8");
+
+    expect(js).toContain('from "/sidebarPriority.js"');
+    expect(js).toContain("deriveRunningConversations");
+    expect(js).toContain("deriveRecentProjects(state.projects, state.conversations, 3)");
+    expect(js).toContain('data-sidebar-section="${section}"');
+    expect(js).toContain('renderSidebarSection("running", "正在执行"');
+    expect(js).toContain('renderSidebarSection("recent", "最近使用"');
+    expect(js).toContain('renderSidebarSection("all", "全部项目"');
+    expect(css).toContain(".sidebar-section-title");
+    expect(css).toContain(".sidebar-running-item");
+    expect(css).toContain(".sidebar-recent-item");
+  });
+
   it("shows active running conversations near the chat top for quick switching", () => {
     const html = fs.readFileSync("public/index.html", "utf8");
     const js = fs.readFileSync("public/app.js", "utf8");
@@ -47,6 +77,11 @@ describe("mobile panel copy", () => {
     expect(js).toContain("waiting_approval");
     expect(css).toContain(".active-sessions");
     expect(css).toContain(".active-session-card");
+    expect(css).toMatch(/\.workspace\s*\{[^}]*display: flex;[^}]*flex-direction: column;/);
+    expect(css).toMatch(/\.chat-panel\s*\{[^}]*flex: 1 1 auto;/);
+    expect(css).toMatch(/@media \(max-width: 860px\)[\s\S]*?\.workspace\s*\{[\s\S]*?grid-template-rows: auto minmax\(0, 1fr\);/);
+    expect(css).toMatch(/@media \(max-width: 860px\)[\s\S]*?\.active-sessions:not\(\[hidden\]\)\s*\{[\s\S]*?grid-row: 1;/);
+    expect(css).toMatch(/@media \(max-width: 860px\)[\s\S]*?\.chat-panel\s*\{[\s\S]*?grid-row: 2;/);
   });
 
   it("lets users add readable remarks to Codex desktop windows", () => {

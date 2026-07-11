@@ -7,6 +7,7 @@ import { buildDiagnosticsSnapshot, formatSanitizedDiagnostics } from "/diagnosti
 import { createConnectionSettingsStore } from "/connectionSettings.js";
 import { buildApiBaseCandidates, isFailoverSafeRequest } from "/apiBaseFailover.js";
 import { createRealtimeRenderScheduler } from "/realtimeRenderScheduler.js";
+import { deriveRecentProjects, deriveRunningConversations } from "/sidebarPriority.js";
 
 const lanApiBase = "http://192.168.101.8:1314";
 const vpnApiBase = "http://100.69.253.5:1314";
@@ -923,19 +924,27 @@ function renderAll() {
 }
 
 function renderHeader() {
-  const project = getActiveProject();
   const conversation = getActiveConversation();
-  els.currentProjectName.textContent = project ? project.name : "选择项目";
+  els.currentProjectName.textContent = "Codex";
   els.conversationTitle.textContent = conversation ? conversation.title : getActiveTaskForConversation(state.activeConversationId)?.prompt ?? "选择一个对话或新建对话";
 }
 
 function renderConversationSidebar() {
-  if (state.projects.length === 0) {
-    els.conversationList.innerHTML = `<div class="sidebar-empty">Win11 还没有同步 D:\\aixm 下的项目。</div>`;
-    return;
-  }
+  const running = deriveRunningConversations(
+    state.projects,
+    state.conversations,
+    [...state.activeTasks].sort(compareActiveTasks)
+  );
+  const recent = deriveRecentProjects(state.projects, state.conversations, 3);
+  const allProjects = state.projects.length > 0
+    ? state.projects.map(renderProjectGroup).join("")
+    : `<div class="sidebar-empty">Win11 还没有同步 D:\\aixm 下的项目。</div>`;
 
-  els.conversationList.innerHTML = state.projects.map(renderProjectGroup).join("");
+  els.conversationList.innerHTML = [
+    running.length > 0 ? renderSidebarSection("running", "正在执行", running.map(renderSidebarRunningItem).join("")) : "",
+    recent.length > 0 ? renderSidebarSection("recent", "最近使用", recent.map(renderSidebarRecentItem).join("")) : "",
+    renderSidebarSection("all", "全部项目", allProjects)
+  ].join("");
 
   els.conversationList.querySelectorAll("[data-project-id]").forEach((button) => {
     button.addEventListener("click", () => switchProject(button.dataset.projectId));
@@ -946,6 +955,47 @@ function renderConversationSidebar() {
   els.conversationList.querySelectorAll("[data-start-project-id]").forEach((button) => {
     button.addEventListener("click", () => createNewConversation(button.dataset.startProjectId));
   });
+  els.conversationList.querySelectorAll("[data-active-task-id]").forEach((button) => {
+    button.addEventListener("click", () => switchActiveTaskConversation(button.dataset.activeTaskId));
+  });
+}
+
+function renderSidebarSection(section, title, content) {
+  return `
+    <section class="sidebar-section sidebar-section-${section}" data-sidebar-section="${section}">
+      <div class="sidebar-section-title"><span>${escapeHtml(title)}</span></div>
+      <div class="sidebar-section-content">${content}</div>
+    </section>
+  `;
+}
+
+function renderSidebarRunningItem({ task, project, conversation }) {
+  const active = task.conversationId === state.activeConversationId;
+  const title = conversation?.title || task.prompt || "正在执行的对话";
+  const disabled = !conversation;
+  return `
+    <button class="sidebar-running-item ${active ? "active" : ""}" data-active-task-id="${escapeHtml(task.id)}" type="button" ${disabled ? "disabled" : ""}>
+      <span class="sidebar-running-status ${escapeHtml(task.status)}">${escapeHtml(statusLabels[task.status] ?? task.status)}</span>
+      <span class="sidebar-item-copy">
+        <strong>${escapeHtml(compactText(title, 28))}</strong>
+        <small>${escapeHtml(project?.name ?? task.projectId)}</small>
+      </span>
+    </button>
+  `;
+}
+
+function renderSidebarRecentItem({ project, conversation }) {
+  const active = conversation.id === state.activeConversationId;
+  return `
+    <button class="sidebar-recent-item ${active ? "active" : ""}" data-conversation-id="${escapeHtml(conversation.id)}" type="button">
+      <span class="recent-project-mark" aria-hidden="true"></span>
+      <span class="sidebar-item-copy">
+        <strong>${escapeHtml(project.name)}</strong>
+        <small>${escapeHtml(compactText(conversation.title || "最近对话", 28))}</small>
+      </span>
+      <time>${escapeHtml(formatRelativeTime(conversation.updatedAt))}</time>
+    </button>
+  `;
 }
 
 function renderProjectGroup(project) {
@@ -1229,6 +1279,7 @@ function renderCurrentWindowSwitcher() {
   els.currentWindowToggle.classList.toggle("bound", Boolean(currentWindow));
   els.currentWindowToggle.classList.toggle("offline", Boolean(current && !currentWindow));
   els.currentWindowToggle.setAttribute("aria-expanded", state.windowPickerOpen ? "true" : "false");
+  els.currentWindowToggle.setAttribute("aria-label", `切换绑定的 Codex 窗口，${label}`);
   els.currentWindowToggle.title = label;
   els.currentWindowLabel.textContent = getCurrentWindowButtonLabel(conversation, currentWindow, current);
 
@@ -1937,7 +1988,7 @@ function renderEmptyState() {
   state.codexWindows = [];
   state.approvals = [];
   state.realtimeState = "stopped";
-  els.currentProjectName.textContent = "手机遥控 Codex";
+  els.currentProjectName.textContent = "Codex";
   els.conversationTitle.textContent = "像和 Codex 聊天一样发任务";
   state.windowPickerOpen = false;
   els.currentWindowToggle.disabled = true;

@@ -13,7 +13,7 @@
       <aside id="conversation-sidebar" class="conversation-sidebar" aria-label="项目和对话">
         <div class="sidebar-header">
           <div>
-            <h1>手机遥控 Codex</h1>
+            <h1>Codex</h1>
             <p>像和 Codex 聊天一样发任务</p>
           </div>
           <button id="sidebar-close" class="icon-button sidebar-close" type="button" aria-label="关闭对话列表">
@@ -28,20 +28,20 @@
         <header class="topbar">
           <div class="title-row">
             <button id="sidebar-toggle" class="icon-button menu-button" type="button" aria-label="打开对话列表">
-              <span class="menu-lines" aria-hidden="true"></span>
+              <img class="topbar-icon" src="/icons/menu.png" alt="" aria-hidden="true" />
             </button>
             <div class="brand">
-              <h2 id="current-project-name">选择项目</h2>
+              <h2 id="current-project-name">Codex</h2>
               <p id="conversation-title">选择一个对话或新建对话</p>
             </div>
           </div>
           <div class="connection">
             <button id="current-window-toggle" class="window-switcher-toggle" type="button" aria-label="切换绑定的 Codex 窗口" aria-expanded="false">
-              <span class="window-switcher-dot" aria-hidden="true"></span>
-              <span id="current-window-label">窗口</span>
+              <img class="topbar-icon" src="/icons/window.png" alt="" aria-hidden="true" />
+              <span id="current-window-label" class="visually-hidden">窗口</span>
             </button>
             <button id="status-icon" class="connection-status computer-status recovering" type="button" aria-label="正在连接" title="正在连接" aria-expanded="false">
-              <span class="computer-mark" aria-hidden="true"></span>
+              <img class="topbar-icon" src="/icons/device.png" alt="" aria-hidden="true" />
             </button>
             <div id="connection-details" class="connection-details" hidden>
               <div><span>NAS</span><strong id="nas-status">检查中</strong></div>
@@ -49,14 +49,14 @@
               <div><span>Codex</span><strong id="codex-status">检查中</strong></div>
             </div>
             <button id="sync-conversations" class="icon-button sync-open" type="button" aria-label="同步电脑 Codex 对话" title="同步电脑 Codex 对话">
-              <span class="sync-mark" aria-hidden="true"></span>
+              <img class="topbar-icon" src="/icons/sync.png" alt="" aria-hidden="true" />
             </button>
             <button id="approval-toggle" class="icon-button approval-open" type="button" aria-label="打开权限收件箱" title="权限收件箱" aria-expanded="false">
-              <span class="approval-mark" aria-hidden="true"></span>
+              <img class="topbar-icon" src="/icons/approval.png" alt="" aria-hidden="true" />
               <span id="approval-count" class="approval-count" hidden>0</span>
             </button>
             <button id="settings-open" class="icon-button settings-open" type="button" aria-label="打开设置">
-              <span class="settings-mark" aria-hidden="true"></span>
+              <img class="topbar-icon" src="/icons/settings.png" alt="" aria-hidden="true" />
             </button>
           </div>
         </header>
