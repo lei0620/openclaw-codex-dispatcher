@@ -13,6 +13,7 @@ $OutputEncoding = [Console]::OutputEncoding
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
+using System.Text;
 
 public static class OpenClawRefreshWin32 {
   [DllImport("user32.dll")]
@@ -20,6 +21,12 @@ public static class OpenClawRefreshWin32 {
 
   [DllImport("user32.dll")]
   public static extern IntPtr GetForegroundWindow();
+
+  [DllImport("user32.dll")]
+  public static extern bool IsWindow(IntPtr hWnd);
+
+  [DllImport("user32.dll")]
+  public static extern bool IsWindowVisible(IntPtr hWnd);
 
   [DllImport("user32.dll")]
   public static extern bool BringWindowToTop(IntPtr hWnd);
@@ -44,20 +51,20 @@ public static class OpenClawRefreshWin32 {
 
   [DllImport("user32.dll")]
   public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)]
+  private static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int maxCount);
+
+  public static string ReadWindowTitle(IntPtr hWnd) {
+    var text = new StringBuilder(512);
+    GetWindowText(hWnd, text, text.Capacity);
+    return text.ToString();
+  }
 }
 "@
 
 function Test-WindowForeground([IntPtr]$targetHandle) {
-  $foregroundHandle = [OpenClawRefreshWin32]::GetForegroundWindow()
-  if ($foregroundHandle -eq $targetHandle) {
-    return $true
-  }
-
-  [uint32]$targetProcessId = 0
-  [uint32]$foregroundProcessId = 0
-  [OpenClawRefreshWin32]::GetWindowThreadProcessId($targetHandle, [ref]$targetProcessId) | Out-Null
-  [OpenClawRefreshWin32]::GetWindowThreadProcessId($foregroundHandle, [ref]$foregroundProcessId) | Out-Null
-  $targetProcessId -ne 0 -and $targetProcessId -eq $foregroundProcessId
+  [OpenClawRefreshWin32]::GetForegroundWindow() -eq $targetHandle
 }
 
 function Set-CodexForeground([IntPtr]$targetHandle) {
@@ -117,18 +124,29 @@ $processes = @(Get-Process |
   Sort-Object StartTime -Descending)
 
 $target = $null
-if ($WindowProcessId.Trim()) {
+if ($WindowHandle.Trim()) {
+  $targetHandleValue = [IntPtr][Int64]$WindowHandle.Trim()
+  if (-not [OpenClawRefreshWin32]::IsWindow($targetHandleValue) -or -not [OpenClawRefreshWin32]::IsWindowVisible($targetHandleValue)) {
+    Write-Output "Skipped Codex desktop refresh because the bound window was not found: handle=$WindowHandle"
+    exit 0
+  }
+  [uint32]$targetProcessIdValue = 0
+  [OpenClawRefreshWin32]::GetWindowThreadProcessId($targetHandleValue, [ref]$targetProcessIdValue) | Out-Null
+  $targetProcess = Get-Process -Id $targetProcessIdValue -ErrorAction SilentlyContinue
+  if (-not $targetProcess -or -not $targetProcess.Path -or $targetProcess.Path -notmatch "\\OpenAI\.Codex_[^\\]+\\app\\(ChatGPT|Codex)\.exe$") {
+    Write-Output "Skipped Codex desktop refresh because the bound handle is not a Codex window: handle=$WindowHandle"
+    exit 0
+  }
+  $target = [pscustomobject]@{
+    Id = [Int32]$targetProcessIdValue
+    MainWindowHandle = $targetHandleValue
+    MainWindowTitle = [OpenClawRefreshWin32]::ReadWindowTitle($targetHandleValue)
+  }
+} elseif ($WindowProcessId.Trim()) {
   $targetProcessIdValue = [Int32]$WindowProcessId.Trim()
   $target = $processes | Where-Object { $_.Id -eq $targetProcessIdValue } | Select-Object -First 1
   if (-not $target) {
     Write-Output "Skipped Codex desktop refresh because the bound process was not found: pid=$WindowProcessId"
-    exit 0
-  }
-} elseif ($WindowHandle.Trim()) {
-  $targetHandleValue = [Int64]$WindowHandle.Trim()
-  $target = $processes | Where-Object { $_.MainWindowHandle.ToInt64() -eq $targetHandleValue } | Select-Object -First 1
-  if (-not $target) {
-    Write-Output "Skipped Codex desktop refresh because the bound window was not found: handle=$WindowHandle"
     exit 0
   }
 } else {
@@ -145,6 +163,7 @@ if (-not $target) {
 }
 
 $handle = [IntPtr]$target.MainWindowHandle
+$previousForegroundHandle = [OpenClawRefreshWin32]::GetForegroundWindow()
 Set-CodexForeground $handle
 if (-not (Test-WindowForeground $handle)) {
   Write-Output "Skipped Codex desktop refresh because the target window could not be focused: pid=$($target.Id), title=$($target.MainWindowTitle)"
@@ -153,4 +172,11 @@ if (-not (Test-WindowForeground $handle)) {
 
 Send-KeyCombo @(0x11, 0x52)
 Start-Sleep -Milliseconds 300
+if (
+  $previousForegroundHandle -ne [IntPtr]::Zero -and
+  $previousForegroundHandle -ne $handle -and
+  [OpenClawRefreshWin32]::IsWindow($previousForegroundHandle)
+) {
+  Set-CodexForeground $previousForegroundHandle
+}
 Write-Output "Refreshed Codex desktop window: pid=$($target.Id), title=$($target.MainWindowTitle)"

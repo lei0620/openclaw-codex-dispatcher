@@ -164,6 +164,15 @@ describe("mobile panel copy", () => {
     expect(css).toContain('.diagnostics-grid');
   });
 
+  it("keeps automatic latest-conversation following opt-in", () => {
+    const html = fs.readFileSync("public/index.html", "utf8");
+    const js = fs.readFileSync("public/app.js", "utf8");
+
+    expect(html).toContain('id="auto-follow-conversation" type="checkbox"');
+    expect(html).not.toContain('id="auto-follow-conversation" type="checkbox" checked');
+    expect(js).toContain('localStorage.getItem(selectionKeys.autoFollowConversation) === "1"');
+  });
+
   it("loads Android connection credentials from Keystore before the first refresh", () => {
     const js = fs.readFileSync("public/app.js", "utf8");
 

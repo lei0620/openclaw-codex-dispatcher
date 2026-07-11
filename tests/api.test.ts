@@ -237,6 +237,51 @@ describe("task api", () => {
     expect(store.listTasks()).toHaveLength(0);
   });
 
+  it("requires a window binding for a new phone conversation when desktop refresh has multiple targets", async () => {
+    const store = new TaskStore();
+    const desktopConfig: DispatcherConfig = {
+      ...config,
+      codexAppServer: { ...config.codexAppServer, enabled: true, refreshDesktopAfterTurn: true },
+      desktopInput: { ...config.desktopInput, enabled: false }
+    };
+    const app = buildAppWithStoreAndConfig(store, desktopConfig);
+    store.upsertAgent("LEI-PC");
+    store.setAgentCodexWindows("LEI-PC", [
+      {
+        id: "LEI-PC:hwnd:1001",
+        agentId: "LEI-PC",
+        handle: "1001",
+        processId: 111,
+        title: "Codex A",
+        updatedAt: new Date().toISOString()
+      },
+      {
+        id: "LEI-PC:hwnd:1002",
+        agentId: "LEI-PC",
+        handle: "1002",
+        processId: 111,
+        title: "Codex B",
+        updatedAt: new Date().toISOString()
+      }
+    ]);
+    const conversation = store.createConversation({ projectId: "openclaw", title: "手机新对话" });
+
+    const response = await request(app)
+      .post("/api/tasks")
+      .set("Authorization", "Bearer panel-token")
+      .send({
+        projectId: "openclaw",
+        conversationId: conversation.id,
+        prompt: "创建新桌面对话",
+        mode: "codex",
+        source: "panel"
+      })
+      .expect(409);
+
+    expect(response.body.error).toContain("先给这个对话绑定一个电脑窗口");
+    expect(store.listTasks()).toHaveLength(0);
+  });
+
   it("lists and resolves pending approvals", async () => {
     const store = new TaskStore();
     const app = buildAppWithStore(store);

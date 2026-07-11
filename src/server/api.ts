@@ -259,7 +259,8 @@ function getWindowBindingError(
   conversation: ConversationRecord | undefined,
   mode: string
 ): string | undefined {
-  if (mode !== "codex" || !config.desktopInput.enabled || !conversation?.codexSessionId) {
+  const desktopRefreshNeedsTarget = Boolean(config.codexAppServer.refreshDesktopAfterTurn);
+  if (mode !== "codex" || (!config.desktopInput.enabled && !desktopRefreshNeedsTarget) || !conversation) {
     return undefined;
   }
   if (windows.length <= 1 || hasResolvableWindowBinding(conversation.refreshWindowId, windows)) {

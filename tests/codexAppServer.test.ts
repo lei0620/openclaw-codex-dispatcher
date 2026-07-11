@@ -88,6 +88,17 @@ describe("runCodexAppServerTask", () => {
     expect(script).toContain("24228");
   });
 
+  it("refreshes an exact top-level window and restores the previous foreground window", () => {
+    const script = fs.readFileSync("scripts/refresh-codex-desktop.ps1", "utf8");
+
+    expect(script).toContain("IsWindow($targetHandleValue)");
+    expect(script).toContain("GetWindowThreadProcessId($targetHandleValue");
+    expect(script).toContain("GetForegroundWindow() -eq $targetHandle");
+    expect(script).toContain("$previousForegroundHandle");
+    expect(script).toContain("Set-CodexForeground $previousForegroundHandle");
+    expect(script).not.toContain("$targetProcessId -ne 0 -and $targetProcessId -eq $foregroundProcessId");
+  });
+
   it("skips stale Codex bin directories when resolving the app-server command", () => {
     const localAppData = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-localappdata-"));
     const binRoot = path.join(localAppData, "OpenAI", "Codex", "bin");

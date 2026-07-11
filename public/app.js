@@ -8,8 +8,8 @@ import { createConnectionSettingsStore } from "/connectionSettings.js";
 
 const lanApiBase = "http://192.168.101.8:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.9.2";
-const releaseNotes = "修复快速切换会话时消息串线、重复同文消息消失，以及 NAS 重启后任务一直卡在执行中的问题。";
+const appVersion = "1.9.3";
+const releaseNotes = "修复多 Codex 窗口共用进程时可能刷新错窗口；刷新后恢复原焦点，自动跟随最新对话改为主动开启。";
 let token = defaultDispatcherToken;
 let apiBase = defaultApiBase();
 
@@ -47,7 +47,7 @@ const state = {
   pendingSends: loadPendingSends(),
   activeProjectId: localStorage.getItem(selectionKeys.project) || "",
   activeConversationId: localStorage.getItem(selectionKeys.conversation) || "",
-  autoFollowConversation: localStorage.getItem(selectionKeys.autoFollowConversation) !== "0",
+  autoFollowConversation: localStorage.getItem(selectionKeys.autoFollowConversation) === "1",
   windowAliases: loadWindowAliases(),
   approvalInboxOpen: false,
   windowPickerOpen: false
