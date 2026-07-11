@@ -173,6 +173,16 @@ describe("mobile panel copy", () => {
     expect(js).toContain('localStorage.getItem(selectionKeys.autoFollowConversation) === "1"');
   });
 
+  it("falls back between the trusted LAN and VPN routes without retrying unsafe posts", () => {
+    const js = fs.readFileSync("public/app.js", "utf8");
+
+    expect(js).toContain('const vpnApiBase = "http://100.69.253.5:1314"');
+    expect(js).toContain("buildApiBaseCandidates(apiBase, [lanApiBase, vpnApiBase])");
+    expect(js).toContain("isFailoverSafeRequest(url, options)");
+    expect(js).toContain("rememberWorkingApiBase(candidate)");
+    expect(js).not.toContain('value === "http://100.69.253.5:1314" ||');
+  });
+
   it("loads Android connection credentials from Keystore before the first refresh", () => {
     const js = fs.readFileSync("public/app.js", "utf8");
 

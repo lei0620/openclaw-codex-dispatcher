@@ -69,4 +69,10 @@ describe("static panel assets", () => {
 
     expect(response.headers["cache-control"]).toBe("no-store");
   });
+
+  it("prevents stale caches for LAN and VPN failover logic", async () => {
+    const response = await request(createApp(config, new TaskStore())).get("/apiBaseFailover.js").expect(200);
+
+    expect(response.headers["cache-control"]).toBe("no-store");
+  });
 });

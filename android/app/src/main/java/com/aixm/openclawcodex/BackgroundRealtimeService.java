@@ -26,6 +26,8 @@ import androidx.core.content.ContextCompat;
 
 import org.json.JSONObject;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.OkHttpClient;
@@ -42,6 +44,8 @@ public final class BackgroundRealtimeService extends Service {
     static final String KEY_CONNECTION_STATE = "connection_state";
     static final String KEY_LAST_CONNECTED_AT = "last_connected_at";
     static final int[] RECONNECT_DELAYS_MS = { 1000, 2000, 5000, 10000, 30000 };
+    private static final String LAN_API_BASE = "http://192.168.101.8:1314";
+    private static final String VPN_API_BASE = "http://100.69.253.5:1314";
 
     private static final String CONNECTION_CHANNEL = "codex_background_connection";
     private static final String EVENT_CHANNEL = "codex_background_events";
@@ -53,6 +57,8 @@ public final class BackgroundRealtimeService extends Service {
     private WebSocket socket;
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
+    private List<String> connectionCandidates = new ArrayList<>();
+    private int connectionCandidateIndex;
     private int reconnectAttempt;
     private boolean stopping;
 
@@ -136,6 +142,8 @@ public final class BackgroundRealtimeService extends Service {
         if (intent != null && ACTION_REFRESH.equals(intent.getAction())) {
             handler.removeCallbacks(reconnectRunnable);
             reconnectAttempt = 0;
+            connectionCandidates.clear();
+            connectionCandidateIndex = 0;
             WebSocket previous = socket;
             socket = null;
             if (previous != null) {
@@ -238,7 +246,12 @@ public final class BackgroundRealtimeService extends Service {
                 scheduleReconnect();
                 return;
             }
-            String url = websocketUrl(settings.apiBase);
+            List<String> candidates = buildConnectionCandidates(settings.apiBase);
+            if (!candidates.equals(connectionCandidates)) {
+                connectionCandidates = candidates;
+                connectionCandidateIndex = 0;
+            }
+            String url = websocketUrl(connectionCandidates.get(connectionCandidateIndex));
             Request request = new Request.Builder().url(url).build();
             setConnectionState("connecting", false);
             socket = client.newWebSocket(request, new Listener(settings));
@@ -418,7 +431,29 @@ public final class BackgroundRealtimeService extends Service {
         if ("authentication_failed".equals(getConnectionState(this))) {
             return;
         }
+        advanceConnectionCandidate();
         scheduleReconnect();
+    }
+
+    private List<String> buildConnectionCandidates(String preferred) {
+        List<String> candidates = new ArrayList<>();
+        addConnectionCandidate(candidates, preferred);
+        addConnectionCandidate(candidates, LAN_API_BASE);
+        addConnectionCandidate(candidates, VPN_API_BASE);
+        return candidates;
+    }
+
+    private static void addConnectionCandidate(List<String> candidates, String value) {
+        String normalized = value == null ? "" : value.trim().replaceAll("/+$", "");
+        if (!normalized.isEmpty() && !candidates.contains(normalized)) {
+            candidates.add(normalized);
+        }
+    }
+
+    private void advanceConnectionCandidate() {
+        if (!connectionCandidates.isEmpty()) {
+            connectionCandidateIndex = (connectionCandidateIndex + 1) % connectionCandidates.size();
+        }
     }
 
     private void scheduleReconnect() {

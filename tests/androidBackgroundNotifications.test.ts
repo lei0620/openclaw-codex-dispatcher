@@ -48,6 +48,10 @@ describe("Android background realtime notifications", () => {
     expect(source).toContain("WifiManager.WIFI_MODE_FULL_HIGH_PERF");
     expect(source).toContain("acquireKeepAliveLocks()");
     expect(source).toContain("releaseKeepAliveLocks()");
+    expect(source).toContain('LAN_API_BASE = "http://192.168.101.8:1314"');
+    expect(source).toContain('VPN_API_BASE = "http://100.69.253.5:1314"');
+    expect(source).toContain("buildConnectionCandidates(settings.apiBase)");
+    expect(source).toContain("advanceConnectionCandidate()");
     expect(source).not.toMatch(/new Request\.Builder\(\).*token/);
   });
 

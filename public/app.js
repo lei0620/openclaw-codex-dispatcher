@@ -5,11 +5,13 @@ import { applyMobileEvent } from "/realtimeState.js";
 import { createLifecycleRecovery } from "/lifecycleRecovery.js";
 import { buildDiagnosticsSnapshot, formatSanitizedDiagnostics } from "/diagnostics.js";
 import { createConnectionSettingsStore } from "/connectionSettings.js";
+import { buildApiBaseCandidates, isFailoverSafeRequest } from "/apiBaseFailover.js";
 
 const lanApiBase = "http://192.168.101.8:1314";
+const vpnApiBase = "http://100.69.253.5:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.9.3";
-const releaseNotes = "修复多 Codex 窗口共用进程时可能刷新错窗口；刷新后恢复原焦点，自动跟随最新对话改为主动开启。";
+const appVersion = "1.9.4";
+const releaseNotes = "新增局域网与 Tailscale/VPN 自动切换：在家优先连接 NAS 内网地址，外网自动回退到原 VPN 地址，后台提醒也会自动重连。";
 let token = defaultDispatcherToken;
 let apiBase = defaultApiBase();
 
@@ -334,7 +336,7 @@ async function loadConnectionSettings() {
 }
 
 function isOldDefaultApiBase(value) {
-  return value === "http://100.69.253.5:1314" || value === "http://leinews:1314" || value === "http://openclaw-nas:4318";
+  return value === "http://leinews:1314" || value === "http://openclaw-nas:4318";
 }
 
 function initAndroidUpdateControls() {
@@ -2102,22 +2104,49 @@ window.openclawHandleAndroidBack = function openclawHandleAndroidBack() {
 };
 
 async function api(url, options = {}) {
+  const candidates = isFailoverSafeRequest(url, options)
+    ? buildApiBaseCandidates(apiBase, [lanApiBase, vpnApiBase])
+    : [apiBase];
+  let lastError;
+
+  for (const candidate of candidates) {
+    try {
+      const payload = await apiAtBase(candidate, url, options);
+      if (candidate !== apiBase) {
+        await rememberWorkingApiBase(candidate);
+      }
+      return payload;
+    } catch (error) {
+      if (error?.isApiResponseError || candidates.length === 1) {
+        throw error;
+      }
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("无法连接 NAS");
+}
+
+async function apiAtBase(candidate, url, options) {
   const nativeHttp = getDispatcherHttp();
   if (nativeHttp) {
     const result = await nativeHttp.request({
       method: options.method || "GET",
-      baseUrl: apiBase,
+      baseUrl: candidate,
       path: url,
       token,
       body: options.body || ""
     });
     if (result.status < 200 || result.status >= 300) {
-      throw new Error(extractApiErrorMessage(result.body) || `HTTP ${result.status}`);
+      throw apiResponseError(extractApiErrorMessage(result.body) || `HTTP ${result.status}`);
     }
-    return JSON.parse(result.body || "{}");
+    try {
+      return JSON.parse(result.body || "{}");
+    } catch {
+      throw apiResponseError("NAS 返回了无法识别的数据");
+    }
   }
 
-  const response = await fetch(`${apiBase}${url}`, {
+  const response = await fetch(`${candidate}${url}`, {
     ...options,
     headers: {
       "content-type": "application/json",
@@ -2126,9 +2155,30 @@ async function api(url, options = {}) {
     }
   });
   if (!response.ok) {
-    throw new Error(extractApiErrorMessage(await response.text()) || `HTTP ${response.status}`);
+    throw apiResponseError(extractApiErrorMessage(await response.text()) || `HTTP ${response.status}`);
   }
-  return response.json();
+  try {
+    return await response.json();
+  } catch {
+    throw apiResponseError("NAS 返回了无法识别的数据");
+  }
+}
+
+function apiResponseError(message) {
+  const error = new Error(message);
+  error.isApiResponseError = true;
+  return error;
+}
+
+async function rememberWorkingApiBase(candidate) {
+  apiBase = normalizeApiBase(candidate);
+  els.apiBase.value = apiBase;
+  try {
+    await connectionSettings.save({ token, apiBase });
+  } catch (error) {
+    state.latestError = `连接已恢复，但保存当前网络地址失败：${error?.message || error}`;
+  }
+  realtime?.restart();
 }
 
 function extractApiErrorMessage(error) {
