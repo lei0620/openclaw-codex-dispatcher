@@ -143,6 +143,87 @@ describe("TaskStore conversations", () => {
     expect(reloaded.listTasks(conversation.id)).toMatchObject([{ id: task.id, prompt: "继续这个对话" }]);
   });
 
+  it("settles interrupted active tasks after a dispatcher restart and releases their slots", () => {
+    const file = statePath();
+    const first = new TaskStore(file);
+    const runningConversation = first.createConversation({ projectId: "openclaw", title: "执行中" });
+    const cancellingConversation = first.createConversation({ projectId: "openclaw", title: "取消中" });
+    const approvalConversation = first.createConversation({ projectId: "openclaw", title: "等授权" });
+    const running = first.createTask({
+      projectId: "openclaw",
+      conversationId: runningConversation.id,
+      prompt: "running",
+      mode: "codex",
+      source: "panel"
+    });
+    const cancelling = first.createTask({
+      projectId: "openclaw",
+      conversationId: cancellingConversation.id,
+      prompt: "cancelling",
+      mode: "codex",
+      source: "panel"
+    });
+    const waiting = first.createTask({
+      projectId: "openclaw",
+      conversationId: approvalConversation.id,
+      prompt: "waiting",
+      mode: "codex",
+      source: "panel"
+    });
+    const queued = first.createTask({
+      projectId: "openclaw",
+      conversationId: runningConversation.id,
+      prompt: "next",
+      mode: "codex",
+      source: "panel"
+    });
+
+    expect(first.assignNextTask("LEI-PC")?.id).toBe(running.id);
+    expect(first.assignNextTask("LEI-PC")?.id).toBe(cancelling.id);
+    expect(first.assignNextTask("LEI-PC")?.id).toBe(waiting.id);
+    first.requestCancel(cancelling.id);
+    first.requestApproval({
+      id: "approval-before-restart",
+      taskId: waiting.id,
+      projectId: "openclaw",
+      message: "允许命令吗",
+      status: "pending",
+      createdAt: new Date().toISOString()
+    });
+    const cursorBeforeRestart = first.getLatestMobileEventId();
+
+    const reloaded = new TaskStore(file);
+    const recoveryEvents = reloaded.getMobileEventWindow(cursorBeforeRestart).events;
+
+    expect(reloaded.getTask(running.id)).toMatchObject({
+      status: "failed",
+      error: "NAS 服务重启，原执行进程已中断，请重新发送。"
+    });
+    expect(reloaded.getTask(cancelling.id)).toMatchObject({
+      status: "cancelled",
+      error: "NAS 服务重启时任务正在取消。"
+    });
+    expect(reloaded.getTask(waiting.id)).toMatchObject({
+      status: "failed",
+      error: "NAS 服务重启时仍在等待授权，请重新发送。",
+      pendingApproval: undefined
+    });
+    expect(reloaded.getTask(running.id)?.finishedAt).toBeTruthy();
+    expect(reloaded.getTask(cancelling.id)?.finishedAt).toBeTruthy();
+    expect(reloaded.getTask(waiting.id)?.finishedAt).toBeTruthy();
+    expect(reloaded.assignNextTask("LEI-PC")?.id).toBe(queued.id);
+
+    const persisted = JSON.parse(fs.readFileSync(file, "utf8")) as { tasks: Array<{ id: string; status: string }> };
+    expect(persisted.tasks.find((task) => task.id === running.id)?.status).toBe("failed");
+    expect(persisted.tasks.find((task) => task.id === cancelling.id)?.status).toBe("cancelled");
+    expect(persisted.tasks.find((task) => task.id === waiting.id)?.status).toBe("failed");
+    expect(recoveryEvents).toMatchObject([
+      { type: "task.updated", taskId: running.id, payload: { task: { status: "failed" } } },
+      { type: "task.updated", taskId: cancelling.id, payload: { task: { status: "cancelled" } } },
+      { type: "task.updated", taskId: waiting.id, payload: { task: { status: "failed" } } }
+    ]);
+  });
+
   it("binds a phone-created conversation to the desktop Codex session after the first turn", () => {
     const store = new TaskStore();
     const conversation = store.createConversation({ projectId: "openclaw", title: "手机新对话" });

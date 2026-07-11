@@ -44,6 +44,7 @@ export class TaskStore extends EventEmitter {
   private readonly mobileEventStoragePath?: string;
   private readonly mobileEventLimit: number;
   private readonly mobileEvents: MobileEvent[] = [];
+  private readonly recoveredTaskIds: string[] = [];
   private nextMobileEventId = 1;
 
   constructor(storagePath?: string, options: TaskStoreOptions = {}) {
@@ -53,6 +54,12 @@ export class TaskStore extends EventEmitter {
     this.mobileEventLimit = Math.max(1, options.mobileEventLimit ?? 500);
     this.load();
     this.loadMobileEvents();
+    for (const taskId of this.recoveredTaskIds) {
+      const task = this.tasks.get(taskId);
+      if (task) {
+        this.publishTaskUpdated(task);
+      }
+    }
   }
 
   createConversation(input: { projectId: string; title?: string }): ConversationRecord {
@@ -718,11 +725,25 @@ export class TaskStore extends EventEmitter {
       this.conversations.set(conversation.id, conversation);
       this.conversationOrder.push(conversation.id);
     }
+    let recoveredInterruptedTask = false;
     for (const task of raw.tasks ?? []) {
-      if (task.status === "waiting_approval") {
-        task.status = "failed";
-        task.error = "服务重启时仍在等待授权，请重新发送。";
+      if (["running", "waiting_approval", "cancelling"].includes(task.status)) {
+        const recoveredAt = new Date().toISOString();
+        if (task.status === "cancelling") {
+          task.status = "cancelled";
+          task.error = "NAS 服务重启时任务正在取消。";
+        } else if (task.status === "waiting_approval") {
+          task.status = "failed";
+          task.error = "NAS 服务重启时仍在等待授权，请重新发送。";
+        } else {
+          task.status = "failed";
+          task.error = "NAS 服务重启，原执行进程已中断，请重新发送。";
+        }
         task.pendingApproval = undefined;
+        task.finishedAt = recoveredAt;
+        task.updatedAt = recoveredAt;
+        this.recoveredTaskIds.push(task.id);
+        recoveredInterruptedTask = true;
       }
       this.tasks.set(task.id, task);
       const clientMessageId = normalizeClientMessageId(task.clientMessageId);
@@ -731,6 +752,9 @@ export class TaskStore extends EventEmitter {
         this.tasksByClientMessageId.set(clientMessageId, task.id);
       }
       this.order.push(task.id);
+    }
+    if (recoveredInterruptedTask) {
+      this.save();
     }
   }
 

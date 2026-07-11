@@ -8,8 +8,8 @@ import { createConnectionSettingsStore } from "/connectionSettings.js";
 
 const lanApiBase = "http://192.168.101.8:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.9.1";
-const releaseNotes = "修复后台提醒服务被系统停止后，重新打开 App 没有自动恢复连接的问题。";
+const appVersion = "1.9.2";
+const releaseNotes = "修复快速切换会话时消息串线、重复同文消息消失，以及 NAS 重启后任务一直卡在执行中的问题。";
 let token = defaultDispatcherToken;
 let apiBase = defaultApiBase();
 
@@ -603,7 +603,7 @@ async function sendPendingRecord(pending) {
   }
   applyMobileEvent(state, createLocalTaskEvent(payload.task));
   persistPendingSends();
-  if (payload.task.conversationId) {
+  if (payload.task.conversationId && !pending.conversationId && !state.activeConversationId) {
     state.activeConversationId = payload.task.conversationId;
     persistSelection();
   }
@@ -854,13 +854,17 @@ async function switchConversation(conversationId) {
 }
 
 async function loadActiveTasks() {
-  if (!state.activeConversationId) {
+  const requestedConversationId = state.activeConversationId;
+  if (!requestedConversationId) {
     state.tasks = [];
     return;
   }
 
-  const payload = await api(`/api/conversations/${state.activeConversationId}/tasks`);
-  state.tasks = mergePendingTasks(payload.tasks ?? [], state.activeConversationId);
+  const payload = await api(`/api/conversations/${requestedConversationId}/tasks`);
+  if (state.activeConversationId !== requestedConversationId) {
+    return;
+  }
+  state.tasks = mergePendingTasks(payload.tasks ?? [], requestedConversationId);
   if (payload.conversation) {
     const index = state.conversations.findIndex((conversation) => conversation.id === payload.conversation.id);
     if (index >= 0) {
@@ -1579,16 +1583,7 @@ function isMessageListNearBottom() {
 }
 
 function getVisibleTasksForConversation(conversation, historyMessages) {
-  if (conversation?.source !== "codex") {
-    return state.tasks;
-  }
-  return state.tasks.filter((task) => {
-    const representedInHistory = isTaskPromptInHistory(task, historyMessages);
-    if (!representedInHistory) {
-      return true;
-    }
-    return task.status === "queued" || task.status === "running" || task.status === "waiting_approval" || task.status === "cancelling";
-  });
+  return state.tasks;
 }
 
 function isTaskPromptInHistory(task, historyMessages) {
@@ -1609,6 +1604,7 @@ function renderSyncedHistory(messages) {
 
 function renderTimeline(historyMessages, tasks, prefixHtml) {
   const timelineHistoryMessages = dedupeTimelineHistoryMessages(historyMessages);
+  const historyMatches = matchTasksToHistory(tasks, timelineHistoryMessages);
   const items = [];
   timelineHistoryMessages.forEach((message, index) => {
     items.push({
@@ -1620,14 +1616,16 @@ function renderTimeline(historyMessages, tasks, prefixHtml) {
 
   tasks.forEach((task, index) => {
     const order = timelineHistoryMessages.length + index * 2;
-    if (!isTaskPromptInHistory(task, timelineHistoryMessages)) {
+    const historyMatch = historyMatches.get(task.id);
+    if (!historyMatch) {
       items.push({
         at: task.createdAt,
         order,
         html: renderUserMessage(task)
       });
     }
-    if (task.status !== "sending" && task.status !== "send_failed") {
+    const fullyRepresented = historyMatch?.hasAssistant && !isActiveTimelineTask(task);
+    if (task.status !== "sending" && task.status !== "send_failed" && !fullyRepresented) {
       items.push({
         at: task.finishedAt || task.updatedAt || task.createdAt,
         order: order + 1,
@@ -1641,6 +1639,61 @@ function renderTimeline(historyMessages, tasks, prefixHtml) {
     .map((item) => item.html)
     .join("");
   return prefixHtml + html;
+}
+
+function matchTasksToHistory(tasks, messages) {
+  const userMessages = messages
+    .map((message, index) => ({ message, index, used: false }))
+    .filter(({ message }) => message.role === "user");
+  const matches = new Map();
+  const chronologicalTasks = [...tasks].sort((left, right) => {
+    const leftTime = Date.parse(left.createdAt || "");
+    const rightTime = Date.parse(right.createdAt || "");
+    if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+      return leftTime - rightTime;
+    }
+    return 0;
+  });
+
+  for (const task of chronologicalTasks) {
+    const prompt = normalizeComparableMessageText(task.prompt);
+    if (!prompt || !task.id) {
+      continue;
+    }
+    const taskTime = Date.parse(task.startedAt || task.createdAt || "");
+    const candidates = userMessages
+      .filter(({ message, used }) => !used && normalizeComparableMessageText(message.text) === prompt)
+      .map((candidate) => ({
+        ...candidate,
+        distance: Math.abs(Date.parse(candidate.message.at || "") - taskTime)
+      }))
+      .filter(({ distance }) => !Number.isFinite(taskTime) || !Number.isFinite(distance) || distance <= 120000)
+      .sort((left, right) => {
+        if (Number.isFinite(left.distance) && Number.isFinite(right.distance)) {
+          return left.distance - right.distance;
+        }
+        return left.index - right.index;
+      });
+    const selected = candidates[0];
+    if (!selected) {
+      continue;
+    }
+    const original = userMessages.find((candidate) => candidate.index === selected.index);
+    if (original) {
+      original.used = true;
+    }
+    const nextUserIndex = messages.findIndex((message, index) => index > selected.index && message.role === "user");
+    const turnEnd = nextUserIndex >= 0 ? nextUserIndex : messages.length;
+    matches.set(task.id, {
+      userIndex: selected.index,
+      hasAssistant: messages.slice(selected.index + 1, turnEnd).some((message) => message.role === "assistant")
+    });
+  }
+  return matches;
+}
+
+function isActiveTimelineTask(task) {
+  return ["sending", "send_failed", "queued", "running", "waiting_approval", "cancelling"].includes(task.status);
 }
 
 function dedupeTimelineHistoryMessages(messages) {

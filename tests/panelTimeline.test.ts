@@ -38,6 +38,37 @@ describe("mobile panel timeline", () => {
 
     expect(html.match(/手机重复测试/g)).toHaveLength(1);
   });
+
+  it("keeps a repeated new phone prompt when an older desktop turn has the same text", () => {
+    const renderTimeline = loadRenderTimeline();
+
+    const html = renderTimeline(
+      [
+        { role: "user", text: "在吗", at: "2026-06-30T12:00:00.000Z" },
+        { role: "assistant", text: "在的。", at: "2026-06-30T12:00:01.000Z" }
+      ],
+      [
+        {
+          id: "task-old",
+          prompt: "在吗",
+          status: "completed",
+          createdAt: "2026-06-30T12:00:00.000Z",
+          finishedAt: "2026-06-30T12:00:01.000Z"
+        },
+        {
+          id: "task-new",
+          prompt: "在吗",
+          status: "running",
+          createdAt: "2026-06-30T12:05:00.000Z",
+          updatedAt: "2026-06-30T12:05:01.000Z"
+        }
+      ],
+      ""
+    );
+
+    expect(html.match(/在吗/g)).toHaveLength(2);
+    expect(html.match(/codex-message/g)).toHaveLength(2);
+  });
 });
 
 function loadRenderTimeline(): (historyMessages: unknown[], tasks: unknown[], prefixHtml: string) => string {
@@ -49,6 +80,8 @@ function loadRenderTimeline(): (historyMessages: unknown[], tasks: unknown[], pr
     "renderUserMessage",
     "isTaskPromptInHistory",
     "normalizeComparableMessageText",
+    "matchTasksToHistory",
+    "isActiveTimelineTask",
     "dedupeTimelineHistoryMessages",
     "isLikelyDuplicateHistoryMessage",
     "timeDistanceMs"

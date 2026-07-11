@@ -31,7 +31,7 @@ describe("mobile panel copy", () => {
     expect(html).toContain("new-conversation");
     expect(html).toContain("sidebar-toggle");
     expect(js).toContain("/api/conversations");
-    expect(js).toContain("/api/conversations/${state.activeConversationId}/tasks");
+    expect(js).toContain("/api/conversations/${requestedConversationId}/tasks");
     expect(js).toContain("activeConversationId");
     expect(js).toContain("data-conversation-id");
   });
