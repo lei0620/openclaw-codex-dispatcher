@@ -18,7 +18,7 @@ interface ParsedSession {
   messages: ConversationMessage[];
 }
 
-const codexConversationLimit = Number(process.env.OPENCLAW_CODEX_CONVERSATION_LIMIT ?? 3);
+const codexConversationLimit = Number(process.env.OPENCLAW_CODEX_CONVERSATION_LIMIT ?? 5);
 const maxSessionFiles = Number(process.env.OPENCLAW_CODEX_SESSION_SCAN_MAX ?? 150);
 const defaultFullReadMaxBytes = 16 * 1024 * 1024;
 const defaultLargeFileHeadBytes = 1024 * 1024;

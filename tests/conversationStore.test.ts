@@ -471,6 +471,29 @@ describe("TaskStore conversations", () => {
 });
 
 describe("conversation api", () => {
+  it("returns five desktop Codex conversations without newer panel-only drafts crowding them out", async () => {
+    const app = express();
+    const store = new TaskStore();
+    app.use(express.json());
+    app.use("/api", createApiRouter({ config, store }));
+    store.createConversation({ projectId: "openclaw", title: "新对话" });
+    store.upsertCodexConversations(Array.from({ length: 5 }, (_, index) => ({
+      projectId: "openclaw",
+      sessionId: `desktop-session-${index + 1}`,
+      title: `电脑对话 ${index + 1}`,
+      updatedAt: `2026-07-0${index + 1}T10:00:00.000Z`,
+      messages: []
+    })));
+
+    const response = await request(app)
+      .get("/api/conversations?projectId=openclaw&source=codex&limit=5")
+      .set("Authorization", "Bearer panel-token")
+      .expect(200);
+
+    expect(response.body.conversations).toHaveLength(5);
+    expect(response.body.conversations.every((conversation: { codexSessionId?: string }) => Boolean(conversation.codexSessionId))).toBe(true);
+  });
+
   it("creates conversations and returns only that conversation's tasks", async () => {
     const app = express();
     const store = new TaskStore();

@@ -34,6 +34,7 @@ describe("mobile panel copy", () => {
     expect(js).toContain("/api/conversations/${requestedConversationId}/tasks");
     expect(js).toContain("activeConversationId");
     expect(js).toContain("data-conversation-id");
+    expect(js).toContain("source=codex&limit=5");
   });
 
   it("uses a fixed Codex brand and generated icons for every topbar control", () => {

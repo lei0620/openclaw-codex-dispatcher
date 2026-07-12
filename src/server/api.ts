@@ -76,9 +76,13 @@ export function createApiRouter({ config, store }: ApiDeps): express.Router {
 
   router.get("/conversations", (req, res) => {
     const projectId = typeof req.query.projectId === "string" ? req.query.projectId : undefined;
+    const source = typeof req.query.source === "string" ? req.query.source : undefined;
     const rawLimit = typeof req.query.limit === "string" ? req.query.limit : undefined;
     const limit = Number.parseInt(rawLimit ?? "", 10);
-    res.json({ conversations: store.listConversations(projectId, Number.isFinite(limit) ? limit : undefined) });
+    const conversations = store.listConversations(projectId)
+      .filter((conversation) => source !== "codex" || Boolean(conversation.codexSessionId))
+      .slice(0, Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : undefined);
+    res.json({ conversations });
   });
 
   router.post("/conversations", (req, res) => {

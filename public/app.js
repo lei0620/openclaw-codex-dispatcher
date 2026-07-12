@@ -14,8 +14,8 @@ import { groupConversationMessages } from "/conversationPresentation.js";
 const lanApiBase = "http://192.168.101.8:1314";
 const vpnApiBase = "http://100.69.253.5:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.9.11";
-const releaseNotes = "手机回答与电脑端保持一致：隐藏 Git 提交、推送等 Codex 内部操作标记，只显示正常回答内容。";
+const appVersion = "1.9.12";
+const releaseNotes = "每个项目同步并显示最近 5 个电脑 Codex 对话，空白草稿和测试会话不再挤占位置。";
 let token = defaultDispatcherToken;
 let apiBase = defaultApiBase();
 
@@ -936,7 +936,7 @@ async function loadRecentProjectConversations(projects) {
     return [];
   }
   const responses = await Promise.all(
-    projects.map((project) => api(`/api/conversations?projectId=${encodeURIComponent(project.id)}&limit=3`))
+    projects.map((project) => api(`/api/conversations?projectId=${encodeURIComponent(project.id)}&source=codex&limit=5`))
   );
   return responses
     .flatMap((item) => item.conversations ?? [])

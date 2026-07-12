@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { isCodexContextMessage, readRecentCodexConversations, selectRecentConversationMessages } from "../src/agent/codexSessions.js";
 import { stripInternalMarkup } from "../src/shared/textSanitizer.js";
 import type { ConversationMessage, ProjectConfig } from "../src/shared/types.js";
@@ -71,6 +71,40 @@ describe("selectRecentConversationMessages", () => {
     expect(
       stripInternalMarkup(`回答正文。\n\n::git-stage{cwd="D:\\\\aixm\\\\openclaw"}\n::git-commit{cwd="D:\\\\aixm\\\\openclaw"}\n::git-push{cwd="D:\\\\aixm\\\\openclaw" branch="main"}`)
     ).toBe("回答正文。");
+  });
+
+  it("syncs the latest five conversations for each project by default", async () => {
+    const previousCodexHome = process.env.CODEX_HOME;
+    const previousLimit = process.env.OPENCLAW_CODEX_CONVERSATION_LIMIT;
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-home-"));
+    try {
+      process.env.CODEX_HOME = tmp;
+      delete process.env.OPENCLAW_CODEX_CONVERSATION_LIMIT;
+      const projectPath = path.join(tmp, "project");
+      const sessionsDir = path.join(tmp, "sessions", "2026", "07", "12");
+      fs.mkdirSync(projectPath, { recursive: true });
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      for (let index = 1; index <= 6; index += 1) {
+        const sessionId = `session-${index}`;
+        writeSessionFile(path.join(sessionsDir, `${sessionId}.jsonl`), sessionId, projectPath, [
+          { role: "user", text: `对话 ${index}`, at: `2026-07-12T0${index}:00:00.000Z` }
+        ]);
+      }
+      const projects: ProjectConfig[] = [{
+        id: "demo", name: "Demo", path: projectPath, defaultMode: "codex", allowedModes: ["codex"], notify: true
+      }];
+      vi.resetModules();
+      const module = await import("../src/agent/codexSessions.js");
+
+      expect(module.readRecentCodexConversations(projects).map((item) => item.sessionId)).toEqual([
+        "session-6", "session-5", "session-4", "session-3", "session-2"
+      ]);
+    } finally {
+      restoreEnv("CODEX_HOME", previousCodexHome);
+      restoreEnv("OPENCLAW_CODEX_CONVERSATION_LIMIT", previousLimit);
+      fs.rmSync(tmp, { recursive: true, force: true });
+      vi.resetModules();
+    }
   });
 
   it("syncs recent messages from a large session file without reading the whole file", () => {
