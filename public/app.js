@@ -7,15 +7,16 @@ import { buildDiagnosticsSnapshot, formatSanitizedDiagnostics } from "/diagnosti
 import { createConnectionSettingsStore } from "/connectionSettings.js";
 import { buildApiBaseCandidates, isFailoverSafeRequest } from "/apiBaseFailover.js";
 import { createRealtimeRenderScheduler } from "/realtimeRenderScheduler.js";
-import { deriveRecentProjects, deriveRunningConversations } from "/sidebarPriority.js";
+import { deriveAttentionConversations, deriveRecentProjects, deriveRunningConversations } from "/sidebarPriority.js";
 import { createTaskStatusWatcher } from "/taskStatusWatcher.js";
 import { groupConversationMessages } from "/conversationPresentation.js";
+import { createUnreadTaskStore } from "/unreadTasks.js";
 
 const lanApiBase = "http://192.168.101.8:1314";
 const vpnApiBase = "http://100.69.253.5:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.9.12";
-const releaseNotes = "每个项目同步并显示最近 5 个电脑 Codex 对话，空白草稿和测试会话不再挤占位置。";
+const appVersion = "1.9.13";
+const releaseNotes = "其他项目完成后会在顶部保留未读结果卡片；右上角新增彻底退出按钮，可停止实时连接和所有后台服务。";
 let token = defaultDispatcherToken;
 let apiBase = defaultApiBase();
 
@@ -41,6 +42,7 @@ const state = {
   projects: [],
   conversations: [],
   tasks: [],
+  allTasks: [],
   activeTasks: [],
   approvals: [],
   agents: [],
@@ -58,6 +60,8 @@ const state = {
   approvalInboxOpen: false,
   windowPickerOpen: false
 };
+
+const unreadTaskStore = createUnreadTaskStore(localStorage);
 
 const scrollState = {
   activeConversationId: "",
@@ -156,7 +160,13 @@ const els = {
   autoFollowConversation: document.querySelector("#auto-follow-conversation"),
   diagnosticsSummary: document.querySelector("#diagnostics-summary"),
   exportDiagnostics: document.querySelector("#export-diagnostics"),
-  diagnosticsStatus: document.querySelector("#diagnostics-status")
+  diagnosticsStatus: document.querySelector("#diagnostics-status"),
+  fullExit: document.querySelector("#full-exit")
+};
+
+const attentionStatusLabels = {
+  completed: "已完成·未读",
+  failed: "失败·未读"
 };
 
 const realtimeLogRender = createRealtimeRenderScheduler(renderMessages, { delayMs: 80 });
@@ -207,6 +217,7 @@ els.settingsScrim.addEventListener("click", closeSettings);
 els.backgroundNotifications?.addEventListener("change", changeBackgroundNotifications);
 els.jumpToLatest.addEventListener("click", jumpToLatestMessage);
 els.exportDiagnostics.addEventListener("click", exportDiagnostics);
+els.fullExit?.addEventListener("click", exitCompletely);
 els.messages.addEventListener("scroll", () => {
   if (isMessageListNearBottom()) {
     clearActiveConversationUnread();
@@ -215,6 +226,7 @@ els.messages.addEventListener("scroll", () => {
 
 initAndroidUpdateControls();
 await initBackgroundNotifications();
+initFullExitControl();
 renderAppVersion();
 await refresh();
 realtime = createRealtimeClient({
@@ -260,6 +272,37 @@ function getBackgroundNotificationsPlugin() {
     return undefined;
   }
   return window.Capacitor?.Plugins?.BackgroundNotifications;
+}
+
+function getAppExitPlugin() {
+  const isNativeAndroid = window.Capacitor?.isNativePlatform?.() &&
+    window.Capacitor?.getPlatform?.() === "android";
+  return isNativeAndroid ? window.Capacitor?.Plugins?.AppExit : undefined;
+}
+
+function initFullExitControl() {
+  const plugin = getAppExitPlugin();
+  if (!plugin || !els.fullExit) {
+    return;
+  }
+  els.fullExit.hidden = false;
+}
+
+async function exitCompletely() {
+  const plugin = getAppExitPlugin();
+  if (!plugin || !window.confirm("退出后将停止所有后台提醒和实时连接，确定彻底退出吗？")) {
+    return;
+  }
+  els.fullExit.disabled = true;
+  realtime?.stop();
+  lifecycleRecovery?.stop();
+  try {
+    await plugin.exitCompletely();
+  } catch (error) {
+    els.fullExit.disabled = false;
+    state.latestError = error?.message || String(error);
+    window.alert("彻底退出失败，请稍后重试。");
+  }
 }
 
 async function initBackgroundNotifications() {
@@ -626,6 +669,7 @@ async function sendPendingRecord(pending) {
   if (!payload.task) {
     throw new Error("NAS 没有返回任务，请重试。");
   }
+  upsertAllTask(payload.task);
   applyMobileEvent(state, createLocalTaskEvent(payload.task));
   taskStatusWatcher.watch(payload.task.id);
   persistPendingSends();
@@ -716,6 +760,7 @@ function createLocalTaskEvent(task) {
 }
 
 function handleWatchedTask(task) {
+  upsertAllTask(task);
   applyMobileEvent(state, {
     eventId: 0,
     type: "task.updated",
@@ -724,9 +769,23 @@ function handleWatchedTask(task) {
     occurredAt: task.updatedAt || new Date().toISOString(),
     payload: { task }
   });
+  reconcileUnreadTasks(task.conversationId === state.activeConversationId && isMessageListNearBottom());
   updateConversationStatusFromTask(task);
   persistPendingSends();
   renderAll();
+}
+
+function upsertAllTask(task) {
+  if (!task?.id) return;
+  const current = state.allTasks.find((item) => item.id === task.id);
+  state.allTasks = [...state.allTasks.filter((item) => item.id !== task.id), { ...current, ...task }];
+}
+
+function reconcileUnreadTasks(activeConversationVisible = false) {
+  unreadTaskStore.reconcile(state.allTasks, {
+    activeConversationId: state.activeConversationId,
+    activeConversationVisible
+  });
 }
 
 function persistPendingSends() {
@@ -777,7 +836,11 @@ function setRealtimeCursor(eventId) {
 async function handleRealtimeEvent(event) {
   const affectsActiveConversation = event.conversationId === state.activeConversationId;
   const userIsReadingHistory = affectsActiveConversation && !isMessageListNearBottom();
+  if (event.payload?.task) {
+    upsertAllTask(event.payload.task);
+  }
   applyMobileEvent(state, event);
+  reconcileUnreadTasks(affectsActiveConversation && !userIsReadingHistory);
   if (event.payload?.task?.conversationId) {
     updateConversationStatusFromTask(event.payload.task);
   }
@@ -877,6 +940,9 @@ async function switchProject(projectId) {
   closeWindowPicker();
   state.activeProjectId = projectId;
   state.activeConversationId = conversationsForProject(projectId)[0]?.id ?? "";
+  if (state.activeConversationId) {
+    unreadTaskStore.markConversationRead(state.activeConversationId, state.allTasks);
+  }
   persistSelection();
   requestMessageScrollToBottom();
   await loadActiveTasks();
@@ -893,6 +959,7 @@ async function switchConversation(conversationId) {
   }
   state.activeProjectId = conversation.projectId;
   state.activeConversationId = conversation.id;
+  unreadTaskStore.markConversationRead(conversation.id, state.allTasks);
   persistSelection();
   requestMessageScrollToBottom();
   await loadActiveTasks();
@@ -925,6 +992,7 @@ async function loadActiveTasks() {
 async function loadActiveSessionTasks() {
   const payload = await api("/api/tasks");
   const tasks = payload.tasks ?? [];
+  state.allTasks = tasks;
   updateConversationTaskStates(tasks);
   return tasks
     .filter(isActiveTask)
@@ -1195,20 +1263,25 @@ async function exportDiagnostics() {
 }
 
 function renderActiveSessions() {
-  const tasks = state.activeTasks;
-  els.activeSessions.hidden = tasks.length === 0;
-  if (tasks.length === 0) {
+  const items = deriveAttentionConversations(
+    state.projects,
+    state.conversations,
+    state.activeTasks,
+    unreadTaskStore.getUnreadTasks(state.allTasks)
+  );
+  els.activeSessions.hidden = items.length === 0;
+  if (items.length === 0) {
     els.activeSessions.innerHTML = "";
     return;
   }
 
   els.activeSessions.innerHTML = `
     <div class="active-sessions-title">
-      <strong>正在执行</strong>
-      <span>${tasks.length} 个</span>
+      <strong>正在执行 / 待查看</strong>
+      <span>${items.length} 个</span>
     </div>
     <div class="active-session-list">
-      ${tasks.map(renderActiveSessionCard).join("")}
+      ${items.map(renderActiveSessionCard).join("")}
     </div>
   `;
   els.activeSessions.querySelectorAll("[data-active-task-id]").forEach((button) => {
@@ -1216,14 +1289,13 @@ function renderActiveSessions() {
   });
 }
 
-function renderActiveSessionCard(task) {
-  const project = state.projects.find((item) => item.id === task.projectId);
-  const conversation = state.conversations.find((item) => item.id === task.conversationId);
+function renderActiveSessionCard({ task, project, conversation, unread }) {
   const active = task.conversationId === state.activeConversationId;
   const title = conversation?.title || task.prompt || "正在执行的对话";
+  const statusLabel = unread ? attentionStatusLabels[task.status] : statusLabels[task.status];
   return `
-    <button class="active-session-card ${active ? "active" : ""}" data-active-task-id="${escapeHtml(task.id)}" type="button">
-      <span class="active-session-status ${escapeHtml(task.status)}">${escapeHtml(statusLabels[task.status] ?? task.status)}</span>
+    <button class="active-session-card ${active ? "active" : ""} ${unread ? "unread" : ""}" data-active-task-id="${escapeHtml(task.id)}" type="button">
+      <span class="active-session-status ${escapeHtml(task.status)}">${escapeHtml(statusLabel ?? task.status)}</span>
       <span class="active-session-main">${escapeHtml(compactText(title, 24))}</span>
       <span class="active-session-project">${escapeHtml(project?.name ?? task.projectId)}</span>
     </button>
@@ -1231,13 +1303,14 @@ function renderActiveSessionCard(task) {
 }
 
 async function switchActiveTaskConversation(taskId) {
-  const task = state.activeTasks.find((item) => item.id === taskId);
+  const task = state.activeTasks.find((item) => item.id === taskId) ?? state.allTasks.find((item) => item.id === taskId);
   if (!task?.conversationId) {
     return;
   }
   setAutoFollow(false);
   state.activeProjectId = task.projectId;
   state.activeConversationId = task.conversationId;
+  unreadTaskStore.markConversationRead(task.conversationId, state.allTasks);
   persistSelection();
   requestMessageScrollToBottom();
   await loadActiveTasks();

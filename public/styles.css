@@ -1343,6 +1343,11 @@ textarea {
   background: rgba(23, 105, 232, 0.08);
 }
 
+.active-session-card.unread {
+  border-color: rgba(22, 132, 107, 0.34);
+  background: rgba(22, 132, 107, 0.07);
+}
+
 .active-session-status {
   align-self: center;
   border-radius: 999px;
@@ -1360,6 +1365,16 @@ textarea {
 }
 
 .active-session-status.cancelling {
+  background: #ffe1dc;
+  color: #b73522;
+}
+
+.active-session-status.completed {
+  background: #ddf4ec;
+  color: #126b57;
+}
+
+.active-session-status.failed {
   background: #ffe1dc;
   color: #b73522;
 }

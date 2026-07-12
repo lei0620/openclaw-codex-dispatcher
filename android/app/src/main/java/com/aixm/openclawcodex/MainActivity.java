@@ -13,6 +13,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(DispatcherHttpPlugin.class);
         registerPlugin(SecureConnectionPlugin.class);
         registerPlugin(BackgroundNotificationsPlugin.class);
+        registerPlugin(AppExitPlugin.class);
         super.onCreate(savedInstanceState);
         installBackGestureGuard();
     }

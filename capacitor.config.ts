@@ -5,6 +5,9 @@ const config: CapacitorConfig = {
   appName: "手机遥控 Codex",
   webDir: "public",
   loggingBehavior: "none",
+  android: {
+    allowMixedContent: true
+  },
   plugins: {
     SystemBars: {
       style: "LIGHT",

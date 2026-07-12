@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveRecentProjects, deriveRunningConversations } from "../public/sidebarPriority.js";
+import { deriveAttentionConversations, deriveRecentProjects, deriveRunningConversations } from "../public/sidebarPriority.js";
 
 const projects = [
   { id: "project-a", name: "项目 A" },
@@ -67,6 +67,45 @@ describe("deriveRunningConversations", () => {
     expect(result).toHaveLength(1);
     expect(result[0].project?.id).toBe("project-a");
     expect(result[0].conversation).toBeUndefined();
+  });
+});
+
+describe("deriveAttentionConversations", () => {
+  it("keeps active conversations first and appends unread terminal results", () => {
+    const conversations = [
+      conversation("conversation-a", "project-a", "2026-07-11T10:00:00.000Z"),
+      conversation("conversation-b", "project-b", "2026-07-11T11:00:00.000Z"),
+      conversation("conversation-c", "project-c", "2026-07-11T12:00:00.000Z")
+    ];
+    const activeTasks = [
+      { id: "running-a", projectId: "project-a", conversationId: "conversation-a", status: "running" },
+      { id: "running-b", projectId: "project-b", conversationId: "conversation-b", status: "queued" }
+    ];
+    const unreadTasks = [
+      { id: "done-b", projectId: "project-b", conversationId: "conversation-b", status: "completed" },
+      { id: "failed-c", projectId: "project-c", conversationId: "conversation-c", status: "failed" }
+    ];
+
+    const result = deriveAttentionConversations(projects, conversations, activeTasks, unreadTasks);
+
+    expect(result.map((item) => [item.task.id, item.unread])).toEqual([
+      ["running-a", false],
+      ["running-b", false],
+      ["failed-c", true]
+    ]);
+  });
+
+  it("shows only the newest unread result for each conversation", () => {
+    const conversations = [conversation("conversation-a", "project-a", "2026-07-11T10:00:00.000Z")];
+    const unreadTasks = [
+      { id: "new", projectId: "project-a", conversationId: "conversation-a", status: "failed", finishedAt: "2026-07-12T10:02:00.000Z" },
+      { id: "old", projectId: "project-a", conversationId: "conversation-a", status: "completed", finishedAt: "2026-07-12T10:01:00.000Z" }
+    ];
+
+    const result = deriveAttentionConversations(projects, conversations, [], unreadTasks);
+
+    expect(result.map((item) => item.task.id)).toEqual(["new"]);
+    expect(result[0].unread).toBe(true);
   });
 });
 

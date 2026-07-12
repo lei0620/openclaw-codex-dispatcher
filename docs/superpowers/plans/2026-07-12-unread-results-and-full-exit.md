@@ -4,7 +4,7 @@
 
 **Goal:** Keep completed results from other conversations visible as unread cards and provide a true Android full-exit action.
 
-**Architecture:** Add a pure frontend unread-task state module backed by local storage and the existing `/api/tasks` snapshot. Add a small Capacitor Android plugin that disables the background service and exits the task/process; expose it from a settings-only button.
+**Architecture:** Add a pure frontend unread-task state module backed by local storage and the existing `/api/tasks` snapshot. Add a small Capacitor Android plugin that disables the background service and exits the task/process; expose it from an Android-only generated power icon beside Settings.
 
 **Tech Stack:** JavaScript ES modules, Vitest, Capacitor Android Java, Gradle, ADB.
 
@@ -13,7 +13,7 @@
 - Existing project ordering, conversation synchronization, task execution, and notification behavior must remain unchanged.
 - Historical terminal tasks that predate the first unread-state baseline must not become unread.
 - Full exit must disable background notifications and stop `BackgroundRealtimeService` before ending the process.
-- The full-exit control is Android-only and requires confirmation.
+- The full-exit control is Android-only, sits beside Settings, and requires confirmation.
 
 ---
 
@@ -67,7 +67,7 @@
 
 - [ ] **Step 1: Write failing static tests** for plugin registration, Android-only button visibility, background preference disable, service stop, task removal, and process termination.
 - [ ] **Step 2: Run** targeted tests and confirm expected failures.
-- [ ] **Step 3: Implement** the settings danger section, confirmation flow, and Android plugin.
+- [ ] **Step 3: Implement** the generated top-bar power button, confirmation flow, and Android plugin.
 - [ ] **Step 4: Run** targeted tests and confirm they pass.
 
 ### Task 4: Release and verification

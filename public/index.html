@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>手机遥控 Codex</title>
-    <link rel="stylesheet" href="/styles.css?v=1.9.9" />
+    <link rel="stylesheet" href="/styles.css?v=1.9.13" />
   </head>
   <body>
     <div id="sidebar-scrim" class="sidebar-scrim" hidden></div>
@@ -54,6 +54,9 @@
             <button id="approval-toggle" class="icon-button approval-open" type="button" aria-label="打开权限收件箱" title="权限收件箱" aria-expanded="false">
               <img class="topbar-icon" src="/icons/approval.png" alt="" aria-hidden="true" />
               <span id="approval-count" class="approval-count" hidden>0</span>
+            </button>
+            <button id="full-exit" class="icon-button exit-open" type="button" aria-label="彻底退出 Codex" title="彻底退出 Codex" hidden>
+              <img class="topbar-icon" src="/icons/exit.png" alt="" aria-hidden="true" />
             </button>
             <button id="settings-open" class="icon-button settings-open" type="button" aria-label="打开设置">
               <img class="topbar-icon" src="/icons/settings.png" alt="" aria-hidden="true" />
@@ -167,6 +170,6 @@
         <p id="update-status" class="update-status" hidden></p>
       </section>
     </aside>
-    <script type="module" src="/app.js?v=1.9.9"></script>
+    <script type="module" src="/app.js?v=1.9.13"></script>
   </body>
 </html>

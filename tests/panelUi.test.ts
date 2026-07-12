@@ -118,6 +118,12 @@ describe("mobile panel copy", () => {
     expect(js).toContain("groupConversationMessages");
     expect(js).toContain("renderProcessDetails");
     expect(js).toContain('completed ? "已处理" : "正在处理"');
+    expect(js).toContain("正在执行 / 待查看");
+    expect(js).toContain('completed: "已完成·未读"');
+    expect(js).toContain('failed: "失败·未读"');
+    expect(js).toContain("createUnreadTaskStore");
+    expect(js).toContain("deriveAttentionConversations");
+    expect(js).not.toMatch(/ensureSelection\(\);\s*reconcileUnreadTasks/);
     expect(css).toContain(".process-details");
     expect(css).toContain(".process-content");
   });
@@ -289,5 +295,14 @@ describe("mobile panel copy", () => {
     expect(js).toContain("result.connectionState");
     expect(js).toContain("后台连接已恢复");
     expect(js).not.toContain("Notification.requestPermission");
+  });
+
+  it("keeps the top-bar full-exit control hidden outside the Android app", () => {
+    const html = fs.readFileSync("public/index.html", "utf8");
+    const js = fs.readFileSync("public/app.js", "utf8");
+
+    expect(html).toMatch(/id="full-exit"[^>]*hidden/);
+    expect(js).toContain("if (!plugin || !els.fullExit)");
+    expect(js).toContain("els.fullExit.hidden = false");
   });
 });

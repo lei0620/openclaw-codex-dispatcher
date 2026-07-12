@@ -35,8 +35,8 @@ const config: DispatcherConfig = {
 };
 
 describe("static panel assets", () => {
-  it("ships six transparent 192px generated header icons", () => {
-    for (const name of ["menu", "window", "device", "sync", "approval", "settings"]) {
+  it("ships seven transparent 192px generated header icons", () => {
+    for (const name of ["menu", "window", "device", "sync", "approval", "exit", "settings"]) {
       const file = fs.readFileSync(`public/icons/${name}.png`);
       expect(file.subarray(1, 4).toString()).toBe("PNG");
       expect(file.readUInt32BE(16)).toBe(192);
