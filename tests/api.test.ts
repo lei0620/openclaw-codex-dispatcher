@@ -63,6 +63,25 @@ function buildAppWithStoreAndConfig(store: TaskStore, dispatcherConfig: Dispatch
 }
 
 describe("task api", () => {
+  it("shows only the projects currently reported by the Codex desktop agent", async () => {
+    const store = new TaskStore();
+    store.setAgentProjects("LEI-PC", [{
+      id: "mavis-drama-assistant",
+      name: "mavis-drama-assistant",
+      path: "D:/aixm/kaifa/mavis-drama-assistant",
+      defaultMode: "codex",
+      allowedModes: ["codex", "dry-run"],
+      notify: true
+    }]);
+
+    const response = await request(buildAppWithStore(store))
+      .get("/api/projects")
+      .set("Authorization", "Bearer panel-token")
+      .expect(200);
+
+    expect(response.body.projects.map((project: { id: string }) => project.id)).toEqual(["mavis-drama-assistant"]);
+  });
+
   it("reports NAS, agent, and Codex service health", async () => {
     const store = new TaskStore();
     store.upsertAgent("LEI-PC");

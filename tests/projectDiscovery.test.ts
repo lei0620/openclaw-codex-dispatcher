@@ -15,6 +15,42 @@ afterEach(() => {
 });
 
 describe("discoverProjects", () => {
+  it("uses the Codex desktop workspace list and excludes archived or unrelated folders", () => {
+    const previousCodexHome = process.env.CODEX_HOME;
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-projects-"));
+    try {
+      const codexHome = path.join(tmpRoot, ".codex-home");
+      const activeProject = path.join(tmpRoot, "active-project");
+      const nestedProject = path.join(tmpRoot, "kaifa", "mavis-drama-assistant");
+      fs.mkdirSync(codexHome);
+      fs.mkdirSync(activeProject);
+      fs.mkdirSync(nestedProject, { recursive: true });
+      fs.mkdirSync(path.join(tmpRoot, "archived-project"));
+      fs.mkdirSync(path.join(tmpRoot, "android-sdk"));
+      fs.writeFileSync(path.join(codexHome, ".codex-global-state.json"), JSON.stringify({
+        "electron-saved-workspace-roots": [nestedProject, activeProject]
+      }));
+      process.env.CODEX_HOME = codexHome;
+
+      const projects = discoverProjects({
+        enabled: true,
+        roots: [tmpRoot],
+        exclude: [],
+        defaultMode: "codex",
+        allowedModes: ["codex", "dry-run"],
+        notify: true
+      });
+
+      expect(projects.map((project) => project.path)).toEqual([
+        nestedProject.replaceAll("\\", "/"),
+        activeProject.replaceAll("\\", "/")
+      ]);
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+    }
+  });
+
   it("turns first-level folders under a workspace root into selectable projects", () => {
     tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-projects-"));
     fs.mkdirSync(path.join(tmpRoot, "openclaw"));

@@ -61,7 +61,7 @@ export function createApiRouter({ config, store }: ApiDeps): express.Router {
   });
 
   router.get("/projects", (_req, res) => {
-    res.json({ projects: store.listProjects(config.projects) });
+    res.json({ projects: store.listProjects() });
   });
 
   router.get("/events", (req, res) => {
