@@ -28,7 +28,8 @@ describe("discoverProjects", () => {
       fs.mkdirSync(path.join(tmpRoot, "archived-project"));
       fs.mkdirSync(path.join(tmpRoot, "android-sdk"));
       fs.writeFileSync(path.join(codexHome, ".codex-global-state.json"), JSON.stringify({
-        "electron-saved-workspace-roots": [nestedProject, activeProject]
+        "electron-saved-workspace-roots": [nestedProject, activeProject],
+        "project-order": [activeProject, nestedProject]
       }));
       process.env.CODEX_HOME = codexHome;
 
@@ -42,8 +43,8 @@ describe("discoverProjects", () => {
       });
 
       expect(projects.map((project) => project.path)).toEqual([
-        nestedProject.replaceAll("\\", "/"),
-        activeProject.replaceAll("\\", "/")
+        activeProject.replaceAll("\\", "/"),
+        nestedProject.replaceAll("\\", "/")
       ]);
     } finally {
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;

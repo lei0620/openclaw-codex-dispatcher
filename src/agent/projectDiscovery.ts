@@ -45,7 +45,7 @@ function readCodexWorkspaceRoots(allowedRoots: string[], excluded: Set<string>):
     }
     const normalizedAllowedRoots = allowedRoots.map((root) => path.resolve(root));
     const seen = new Set<string>();
-    return savedRoots
+    const validSavedRoots = savedRoots
       .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
       .map((value) => path.resolve(value))
       .filter((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isDirectory())
@@ -56,6 +56,14 @@ function readCodexWorkspaceRoots(allowedRoots: string[], excluded: Set<string>):
         seen.add(key);
         return true;
       });
+    const savedByPath = new Map(validSavedRoots.map((candidate) => [candidate.toLowerCase(), candidate]));
+    const projectOrder = Array.isArray(state["project-order"]) ? state["project-order"] : [];
+    const ordered = projectOrder
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .map((value) => savedByPath.get(path.resolve(value).toLowerCase()))
+      .filter((value): value is string => Boolean(value));
+    const orderedKeys = new Set(ordered.map((candidate) => candidate.toLowerCase()));
+    return [...ordered, ...validSavedRoots.filter((candidate) => !orderedKeys.has(candidate.toLowerCase()))];
   } catch {
     return [];
   }
