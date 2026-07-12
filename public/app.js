@@ -14,8 +14,8 @@ import { groupConversationMessages } from "/conversationPresentation.js";
 const lanApiBase = "http://192.168.101.8:1314";
 const vpnApiBase = "http://100.69.253.5:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.9.10";
-const releaseNotes = "提升实时消息稳定性：局域网与 VPN 自动切换，连接异常时 5 秒内自动补齐，不再依赖手动刷新。";
+const appVersion = "1.9.11";
+const releaseNotes = "手机回答与电脑端保持一致：隐藏 Git 提交、推送等 Codex 内部操作标记，只显示正常回答内容。";
 let token = defaultDispatcherToken;
 let apiBase = defaultApiBase();
 
@@ -2036,6 +2036,7 @@ function getUsefulLogs(task) {
 function sanitizeDisplayText(value) {
   return String(value)
     .replace(/<oai-mem-citation>[\s\S]*?<\/oai-mem-citation>/gi, "")
+    .replace(/^[ \t]*::(?:git-[a-z-]+|created-thread|code-comment)\{[^\r\n]*\}[ \t]*(?:\r?\n|$)/gim, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }

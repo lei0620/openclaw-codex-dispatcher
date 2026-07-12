@@ -4,6 +4,14 @@ import { describe, expect, it } from "vitest";
 import { groupConversationMessages } from "../public/conversationPresentation.js";
 
 describe("mobile panel timeline", () => {
+  it("hides Codex desktop action directives from phone answer text", () => {
+    const sanitizeDisplayText = loadStandaloneFunction<(value: unknown) => string>("sanitizeDisplayText");
+
+    expect(
+      sanitizeDisplayText(`回答正文。\n\n::git-stage{cwd="D:\\\\aixm\\\\openclaw"}\n::git-commit{cwd="D:\\\\aixm\\\\openclaw"}\n::git-push{cwd="D:\\\\aixm\\\\openclaw" branch="main"}`)
+    ).toBe("回答正文。");
+  });
+
   it("does not duplicate a phone prompt that already appears in synced Codex history", () => {
     const renderTimeline = loadRenderTimeline();
 
@@ -100,6 +108,13 @@ function loadRenderTimeline(): (historyMessages: unknown[], tasks: unknown[], pr
   };
   vm.runInNewContext(`${code}\nthis.renderTimeline = renderTimeline;`, sandbox);
   return sandbox.renderTimeline as (historyMessages: unknown[], tasks: unknown[], prefixHtml: string) => string;
+}
+
+function loadStandaloneFunction<T>(name: string): T {
+  const source = fs.readFileSync("public/app.js", "utf8");
+  const sandbox = { result: undefined as unknown };
+  vm.runInNewContext(`${extractFunction(source, name)}\nthis.result = ${name};`, sandbox);
+  return sandbox.result as T;
 }
 
 function extractFunction(source: string, name: string): string {

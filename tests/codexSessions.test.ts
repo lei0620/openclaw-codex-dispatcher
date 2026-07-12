@@ -67,6 +67,12 @@ describe("selectRecentConversationMessages", () => {
     ).toBe("收到了，这次是实时进来的。");
   });
 
+  it("removes Codex desktop action directives from synced answers", () => {
+    expect(
+      stripInternalMarkup(`回答正文。\n\n::git-stage{cwd="D:\\\\aixm\\\\openclaw"}\n::git-commit{cwd="D:\\\\aixm\\\\openclaw"}\n::git-push{cwd="D:\\\\aixm\\\\openclaw" branch="main"}`)
+    ).toBe("回答正文。");
+  });
+
   it("syncs recent messages from a large session file without reading the whole file", () => {
     const previousEnv = {
       CODEX_HOME: process.env.CODEX_HOME,
