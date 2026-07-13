@@ -49,7 +49,7 @@ Expected: `package.json` and `package-lock.json` include `@capacitor/app`.
 
 - [ ] **Step 4: Implement minimal native lifecycle support**
 
-Import `App` from `@capacitor/app` in `public/app.js`, pass it as `nativeApp`, and update `public/lifecycleRecovery.js` to register `resume` plus active `appStateChange`. Store returned listener handles and remove them during `stop()`.
+Read the installed `App` plugin from `window.Capacitor.Plugins.App` in `public/app.js`, pass it as `nativeApp`, and update `public/lifecycleRecovery.js` to register `resume` plus active `appStateChange`. The public frontend is an unbundled ES module, so it must use the existing Capacitor bridge instead of a bare npm import. Store returned listener handles and remove them during `stop()`.
 
 - [ ] **Step 5: Run focused tests and verify GREEN**
 
@@ -73,7 +73,7 @@ Expected: all focused tests pass.
 
 - [ ] **Step 1: Add failing static integration assertions**
 
-Assert that `public/app.js` imports `App`, passes `nativeApp: App`, and release metadata is `1.9.14`; assert Android version code is `55`.
+Assert that `public/app.js` reads the native App plugin, passes it as `nativeApp`, and release metadata is `1.9.14`; assert Android version code is `55`.
 
 - [ ] **Step 2: Run focused tests and verify RED**
 

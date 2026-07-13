@@ -206,8 +206,19 @@ describe("mobile panel copy", () => {
     const js = fs.readFileSync("public/app.js", "utf8");
 
     expect(js).toContain('createLifecycleRecovery');
+    expect(js).toContain('window.Capacitor?.Plugins?.App');
+    expect(js).toContain('nativeApp: getCapacitorAppPlugin()');
     expect(js).toContain('lifecycleRecovery.start()');
     expect(js).toContain('restartRealtime: () => realtime.restart()');
+  });
+
+  it("publishes the realtime resume fix as Android 1.9.14 build 55", () => {
+    const js = fs.readFileSync("public/app.js", "utf8");
+    const gradle = fs.readFileSync("android/app/build.gradle", "utf8");
+
+    expect(js).toContain('const appVersion = "1.9.14"');
+    expect(gradle).toContain('versionCode 55');
+    expect(gradle).toContain('versionName "1.9.14"');
   });
 
   it("shows a jump-to-latest control without forcing history readers to the bottom", () => {

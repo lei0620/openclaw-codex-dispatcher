@@ -15,8 +15,8 @@ import { createUnreadTaskStore } from "/unreadTasks.js";
 const lanApiBase = "http://192.168.101.8:1314";
 const vpnApiBase = "http://100.69.253.5:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.9.13";
-const releaseNotes = "其他项目完成后会在顶部保留未读结果卡片；右上角新增彻底退出按钮，可停止实时连接和所有后台服务。";
+const appVersion = "1.9.14";
+const releaseNotes = "加强消息实时稳定性：从锁屏或后台返回时立即重连并补齐消息，减少延迟和手动刷新。";
 let token = defaultDispatcherToken;
 let apiBase = defaultApiBase();
 
@@ -242,6 +242,7 @@ realtime = createRealtimeClient({
 });
 realtime.start();
 lifecycleRecovery = createLifecycleRecovery({
+  nativeApp: getCapacitorAppPlugin(),
   restartRealtime: () => realtime.restart(),
   reconcile: () => refresh()
 });
@@ -263,6 +264,12 @@ function getDispatcherHttp() {
 
 function getSecureConnectionPlugin() {
   return window.Capacitor?.Plugins?.SecureConnection;
+}
+
+function getCapacitorAppPlugin() {
+  const isNativeAndroid = window.Capacitor?.isNativePlatform?.() &&
+    window.Capacitor?.getPlatform?.() === "android";
+  return isNativeAndroid ? window.Capacitor?.Plugins?.App : undefined;
 }
 
 function getBackgroundNotificationsPlugin() {
