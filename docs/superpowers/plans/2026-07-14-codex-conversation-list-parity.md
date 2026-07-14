@@ -150,7 +150,7 @@ Refresh/sync the phone through ADB, inspect the UI hierarchy or screenshot, and 
 
 Add a changelog entry explaining that phone conversation ordering now follows Codex desktop activity, archived conversations no longer consume recent slots, and Win11 synchronization does less background file work.
 
-- [ ] **Step 6: Commit, push, and report residual findings**
+- [x] **Step 6: Commit, push, and report residual findings**
 
 Commit the changelog, push `main`, and report only evidence-backed remaining optimization opportunities. Do not include `artifacts/` or `output/`.
 
