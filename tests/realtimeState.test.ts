@@ -81,6 +81,27 @@ describe("applyMobileEvent", () => {
     });
     expect(state.approvals).toEqual([]);
   });
+
+  it("removes a deleted conversation and clears the active selection", () => {
+    const state = createState();
+    state.conversations = [
+      { id: "conversation-1", projectId: "openclaw", title: "旧对话" },
+      { id: "conversation-2", projectId: "openclaw", title: "保留对话" }
+    ];
+
+    applyMobileEvent(state, {
+      eventId: 6,
+      type: "conversation.deleted",
+      conversationId: "conversation-1",
+      occurredAt: "2026-07-11T01:00:02.000Z",
+      payload: { conversationId: "conversation-1" }
+    });
+
+    expect(state.conversations).toEqual([
+      { id: "conversation-2", projectId: "openclaw", title: "保留对话" }
+    ]);
+    expect(state.activeConversationId).toBe("");
+  });
 });
 
 function createState(): any {

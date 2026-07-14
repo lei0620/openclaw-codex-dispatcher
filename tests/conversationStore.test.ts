@@ -468,6 +468,68 @@ describe("TaskStore conversations", () => {
 
     expect(store.assignNextTask("LEI-PC")?.id).toBe(third.id);
   });
+
+  it("reconciles a complete Codex snapshot without deleting conversations used by phone tasks", () => {
+    const store = new TaskStore();
+    store.upsertCodexConversations([
+      {
+        projectId: "openclaw",
+        sessionId: "session-current",
+        title: "当前电脑对话",
+        updatedAt: "2026-07-14T12:00:00.000Z",
+        messages: []
+      },
+      {
+        projectId: "openclaw",
+        sessionId: "session-stale",
+        title: "旧内部对话",
+        updatedAt: "2026-07-13T12:00:00.000Z",
+        messages: []
+      },
+      {
+        projectId: "openclaw",
+        sessionId: "session-with-phone-task",
+        title: "已有手机记录",
+        updatedAt: "2026-07-12T12:00:00.000Z",
+        messages: []
+      }
+    ]);
+    const preserved = store.listConversations("openclaw").find((conversation) => (
+      conversation.codexSessionId === "session-with-phone-task"
+    ));
+    expect(preserved).toBeDefined();
+    store.createTask({
+      projectId: "openclaw",
+      conversationId: preserved!.id,
+      prompt: "保留这条手机任务记录",
+      mode: "dry-run",
+      source: "panel"
+    });
+
+    store.upsertCodexConversations([
+      {
+        projectId: "openclaw",
+        sessionId: "session-current",
+        title: "当前电脑对话",
+        updatedAt: "2026-07-14T12:00:00.000Z",
+        messages: []
+      }
+    ], ["openclaw"]);
+
+    expect(store.listConversations("openclaw").map((conversation) => conversation.codexSessionId)).toEqual([
+      "session-with-phone-task",
+      "session-current"
+    ]);
+    expect(store.getMobileEventWindow(0).events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "conversation.deleted",
+        payload: { conversationId: expect.any(String) }
+      })
+    ]));
+    expect(store.listConversations("openclaw").some((conversation) => (
+      conversation.codexSessionId === "session-stale"
+    ))).toBe(false);
+  });
 });
 
 describe("conversation api", () => {

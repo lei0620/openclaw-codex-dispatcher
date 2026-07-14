@@ -127,7 +127,7 @@ function handleAgentMessage(
     store.setAgentProjects(agentId, message.projects);
   }
   if (message.type === "agent.codexConversations") {
-    store.upsertCodexConversations(message.conversations);
+    store.upsertCodexConversations(message.conversations, message.projectIds);
   }
   if (message.type === "agent.codexWindows") {
     store.setAgentCodexWindows(agentId, message.windows);

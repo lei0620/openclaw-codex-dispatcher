@@ -154,19 +154,23 @@ function sendCodexConversations(ws: WebSocket, projects: ProjectConfig[], force 
     return;
   }
   const conversations = readRecentCodexConversations(projects);
+  const projectIds = projects.map((project) => project.id);
   const signature = JSON.stringify(
-    conversations.map((conversation) => ({
-      projectId: conversation.projectId,
-      sessionId: conversation.sessionId,
-      updatedAt: conversation.updatedAt,
-      messages: conversation.messages
-    }))
+    {
+      projectIds,
+      conversations: conversations.map((conversation) => ({
+        projectId: conversation.projectId,
+        sessionId: conversation.sessionId,
+        updatedAt: conversation.updatedAt,
+        messages: conversation.messages
+      }))
+    }
   );
   if (!force && signature === lastConversationSignature) {
     return;
   }
   lastConversationSignature = signature;
-  ws.send(JSON.stringify({ type: "agent.codexConversations", conversations }));
+  ws.send(JSON.stringify({ type: "agent.codexConversations", conversations, projectIds }));
   console.log(`reported ${conversations.length} Codex conversations`);
 }
 

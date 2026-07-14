@@ -16,7 +16,7 @@
 - Modify: `tests/codexSessions.test.ts`
 - Test: `tests/codexSessions.test.ts`
 
-- [ ] **Step 1: Add a state database test fixture**
+- [x] **Step 1: Add a state database test fixture**
 
 Create a temporary `state_5.sqlite` with the Codex `threads` columns used by the agent. Insert six user threads, one archived thread, and one `thread_source = 'subagent'` thread. Give `session-2` a stale `session_index.jsonl` timestamp but the second-newest `recency_at_ms`; give the archived and subagent threads newer recency values so an unfiltered implementation fails.
 
@@ -35,7 +35,7 @@ database.exec(`
 `);
 ```
 
-- [ ] **Step 2: Assert desktop-visible order and title behavior**
+- [x] **Step 2: Assert desktop-visible order and title behavior**
 
 ```ts
 expect(readRecentCodexConversations(projects).map(({ sessionId, title }) => ({ sessionId, title }))).toEqual([
@@ -47,13 +47,13 @@ expect(readRecentCodexConversations(projects).map(({ sessionId, title }) => ({ s
 ]);
 ```
 
-- [ ] **Step 3: Run the focused test and verify RED**
+- [x] **Step 3: Run the focused test and verify RED**
 
 Run: `npx vitest run tests/codexSessions.test.ts`
 
 Expected: FAIL because the current implementation sorts by the stale session index/file timestamp and does not read desktop recency or archived state.
 
-- [ ] **Step 4: Commit the failing test only after recording RED evidence**
+- [x] **Step 4: Commit the failing test only after recording RED evidence**
 
 Run:
 
@@ -68,7 +68,7 @@ git commit -m "test: reproduce Codex conversation ordering drift"
 - Modify: `src/agent/codexSessions.ts`
 - Test: `tests/codexSessions.test.ts`
 
-- [ ] **Step 1: Read Codex thread metadata without writing the database**
+- [x] **Step 1: Read Codex thread metadata without writing the database**
 
 Use `DatabaseSync` with `{ readOnly: true }`. Query only unarchived rows whose `thread_source` is not `subagent`, then convert the desktop recency value to ISO time. Any missing database, unsupported schema, or SQLite failure must return `undefined` so the legacy scanner remains available.
 
@@ -80,7 +80,7 @@ interface CodexThreadState {
 }
 ```
 
-- [ ] **Step 2: Normalize Windows device-prefixed paths**
+- [x] **Step 2: Normalize Windows device-prefixed paths**
 
 Before `path.resolve`, remove the `\\?\` prefix used by the Codex database so `\\?\D:\aixm\对话` matches the discovered project path `D:/aixm/对话`.
 
@@ -88,23 +88,23 @@ Before `path.resolve`, remove the `\\?\` prefix used by the Codex database so `\
 const withoutDevicePrefix = value.replace(/^\\\\\?\\/, "");
 ```
 
-- [ ] **Step 3: Select five threads per project before reading rollout files**
+- [x] **Step 3: Select five threads per project before reading rollout files**
 
 Map metadata to projects, sort by `recencyAt`, take the configured limit for each project, and parse only rollout files whose filename contains a selected session id. Override parsed `updatedAt` with desktop recency while retaining the session-index title.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run: `npx vitest run tests/codexSessions.test.ts`
 
 Expected: all `codexSessions` tests pass, including the new desktop-order regression.
 
-- [ ] **Step 5: Run TypeScript build**
+- [x] **Step 5: Run TypeScript build**
 
 Run: `npm run build`
 
 Expected: exit code 0 with no TypeScript errors.
 
-- [ ] **Step 6: Commit implementation**
+- [x] **Step 6: Commit implementation**
 
 Run:
 
@@ -118,13 +118,13 @@ git commit -m "fix: match Codex desktop conversation order"
 **Files:**
 - Modify: `docs/CHANGELOG.zh-CN.md`
 
-- [ ] **Step 1: Benchmark real Win11 conversation sync**
+- [x] **Step 1: Benchmark real Win11 conversation sync**
 
 Run `readRecentCodexConversations(discoverProjects(...))` against the current Codex home and record elapsed time and the five `D:\aixm\对话` titles.
 
 Expected: “配置飞牛NAS源” is second, no archived or subagent thread appears, and elapsed time is below the 2.5-second sync period.
 
-- [ ] **Step 2: Run full verification**
+- [x] **Step 2: Run full verification**
 
 Run:
 
@@ -136,20 +136,52 @@ git diff --check
 
 Expected: all tests pass, build exits 0, and diff check reports no errors.
 
-- [ ] **Step 3: Restart the Win11 agent and trigger NAS synchronization**
+- [x] **Step 3: Restart the Win11 agent and trigger NAS synchronization**
 
 Restart only the OpenClaw Win11 agent process, leaving other Codex windows and tasks untouched. Call `POST /api/conversations/sync`, then query the NAS recent five for project `D:/aixm/对话`.
 
 Expected: the NAS order matches the desktop order and includes “配置飞牛NAS源”.
 
-- [ ] **Step 4: Verify the connected Android app**
+- [x] **Step 4: Verify the connected Android app**
 
 Refresh/sync the phone through ADB, inspect the UI hierarchy or screenshot, and confirm the target conversation appears in the `对话` project without changing window bindings or task state.
 
-- [ ] **Step 5: Document the user-visible change**
+- [x] **Step 5: Document the user-visible change**
 
 Add a changelog entry explaining that phone conversation ordering now follows Codex desktop activity, archived conversations no longer consume recent slots, and Win11 synchronization does less background file work.
 
 - [ ] **Step 6: Commit, push, and report residual findings**
 
 Commit the changelog, push `main`, and report only evidence-backed remaining optimization opportunities. Do not include `artifacts/` or `output/`.
+
+### Task 4: Reconcile NAS Snapshot And Remove Stale Phone Entries
+
+**Files:**
+- Modify: `src/shared/types.ts`
+- Modify: `src/agent/index.ts`
+- Modify: `src/server/agentWs.ts`
+- Modify: `src/server/taskStore.ts`
+- Modify: `public/realtimeState.js`
+- Modify: `public/app.js`
+- Test: `tests/conversationStore.test.ts`
+- Test: `tests/realtimeState.test.ts`
+
+- [x] **Step 1: Reproduce stale NAS records and missing realtime deletion**
+
+Add failing tests showing that an upsert-only NAS keeps a removed desktop session and that the phone ignores deletion events.
+
+- [x] **Step 2: Send project coverage with each complete agent snapshot**
+
+Include `projectIds` in `agent.codexConversations` and in its change signature so projects with zero selected conversations can still be reconciled.
+
+- [x] **Step 3: Safely prune stale Codex conversations**
+
+Remove only Codex-sourced conversations in covered projects that are absent from the new snapshot and have no associated phone task. Preserve every conversation with task history.
+
+- [x] **Step 4: Apply realtime deletions on the phone**
+
+Publish `conversation.deleted`, remove the record from phone state, and repair the active selection without requiring a manual refresh.
+
+- [x] **Step 5: Deploy and verify against the live NAS and Android app**
+
+Restart only the bridge services, trigger synchronization, verify stale server records are gone, and confirm the real phone list matches Codex desktop.

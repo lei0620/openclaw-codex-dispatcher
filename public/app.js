@@ -1,7 +1,7 @@
 import { createRefreshGate } from "/refreshGate.js";
 import { deriveConnectionStatus } from "/connectionStatus.js";
 import { createRealtimeClient } from "/realtimeClient.js";
-import { applyMobileEvent } from "/realtimeState.js";
+import { applyMobileEvent } from "/realtimeState.js?v=1.9.15";
 import { createLifecycleRecovery } from "/lifecycleRecovery.js";
 import { buildDiagnosticsSnapshot, formatSanitizedDiagnostics } from "/diagnostics.js";
 import { createConnectionSettingsStore } from "/connectionSettings.js";
@@ -15,8 +15,8 @@ import { createUnreadTaskStore } from "/unreadTasks.js";
 const lanApiBase = "http://192.168.101.8:1314";
 const vpnApiBase = "http://100.69.253.5:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.9.14";
-const releaseNotes = "加强消息实时稳定性：从锁屏或后台返回时立即重连并补齐消息，减少延迟和手动刷新。";
+const appVersion = "1.9.15";
+const releaseNotes = "会话列表与电脑 Codex 保持一致：按桌面最近使用顺序显示每个项目最近五条，并自动清理已归档和内部工作线程。";
 let token = defaultDispatcherToken;
 let apiBase = defaultApiBase();
 
@@ -847,6 +847,9 @@ async function handleRealtimeEvent(event) {
     upsertAllTask(event.payload.task);
   }
   applyMobileEvent(state, event);
+  if (event.type === "conversation.deleted") {
+    ensureSelection();
+  }
   reconcileUnreadTasks(affectsActiveConversation && !userIsReadingHistory);
   if (event.payload?.task?.conversationId) {
     updateConversationStatusFromTask(event.payload.task);

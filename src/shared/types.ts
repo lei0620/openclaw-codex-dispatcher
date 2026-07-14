@@ -143,6 +143,7 @@ export interface ConversationRecord {
 export type MobileEventType =
   | "conversation.created"
   | "conversation.updated"
+  | "conversation.deleted"
   | "projects.updated"
   | "task.created"
   | "task.updated"
@@ -233,7 +234,7 @@ export type AgentClientMessage =
   | { type: "agent.hello"; agentId: string; token: string }
   | { type: "agent.heartbeat"; sentAt: string; codex: CodexServiceStatus }
   | { type: "agent.projects"; projects: ProjectConfig[] }
-  | { type: "agent.codexConversations"; conversations: SyncedCodexConversation[] }
+  | { type: "agent.codexConversations"; conversations: SyncedCodexConversation[]; projectIds?: string[] }
   | { type: "agent.codexWindows"; windows: CodexDesktopWindow[] }
   | { type: "task.approval.requested"; approval: ApprovalRecord }
   | { type: "task.log"; taskId: string; stream: TaskLogStream; text: string }

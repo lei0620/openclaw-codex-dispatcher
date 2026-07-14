@@ -99,10 +99,11 @@ export class TaskStore extends EventEmitter {
     return conversation ? structuredClone(conversation) : undefined;
   }
 
-  upsertCodexConversations(input: SyncedCodexConversation[]): ConversationRecord[] {
+  upsertCodexConversations(input: SyncedCodexConversation[], syncedProjectIds?: string[]): ConversationRecord[] {
     const records: ConversationRecord[] = [];
     const changedRecords: ConversationRecord[] = [];
-    for (const item of coalesceSyncedConversations(input)) {
+    const conversations = coalesceSyncedConversations(input);
+    for (const item of conversations) {
       const existingBySession = [...this.conversations.values()].find((conversation) => conversation.codexSessionId === item.sessionId);
       const id = existingBySession?.id ?? codexConversationId(item.sessionId);
       const existing = this.conversations.get(id);
@@ -128,12 +129,47 @@ export class TaskStore extends EventEmitter {
         changedRecords.push(structuredClone(record));
       }
     }
-    if (changedRecords.length > 0) {
+    const coveredProjectIds = new Set((syncedProjectIds ?? []).filter(Boolean));
+    const incomingSessionIds = new Set(conversations.map((conversation) => conversation.sessionId));
+    const conversationIdsWithTasks = new Set(
+      this.order
+        .map((taskId) => this.tasks.get(taskId)?.conversationId)
+        .filter((conversationId): conversationId is string => Boolean(conversationId))
+    );
+    const deletedRecords: ConversationRecord[] = [];
+    if (coveredProjectIds.size > 0) {
+      for (const conversation of this.conversations.values()) {
+        if (
+          conversation.source !== "codex"
+          || !coveredProjectIds.has(conversation.projectId)
+          || !conversation.codexSessionId
+          || incomingSessionIds.has(conversation.codexSessionId)
+          || conversationIdsWithTasks.has(conversation.id)
+        ) {
+          continue;
+        }
+        this.conversations.delete(conversation.id);
+        deletedRecords.push(structuredClone(conversation));
+      }
+      if (deletedRecords.length > 0) {
+        const deletedIds = new Set(deletedRecords.map((conversation) => conversation.id));
+        const remainingOrder = this.conversationOrder.filter((id) => !deletedIds.has(id));
+        this.conversationOrder.splice(0, this.conversationOrder.length, ...remainingOrder);
+      }
+    }
+    if (changedRecords.length > 0 || deletedRecords.length > 0) {
       this.save();
     }
     this.emit("codex.synced");
     for (const conversation of changedRecords) {
       this.publishMobileEvent("conversation.updated", { conversation }, { conversationId: conversation.id });
+    }
+    for (const conversation of deletedRecords) {
+      this.publishMobileEvent(
+        "conversation.deleted",
+        { conversationId: conversation.id },
+        { conversationId: conversation.id }
+      );
     }
     return records;
   }

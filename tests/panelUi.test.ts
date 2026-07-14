@@ -212,13 +212,14 @@ describe("mobile panel copy", () => {
     expect(js).toContain('restartRealtime: () => realtime.restart()');
   });
 
-  it("publishes the realtime resume fix as Android 1.9.14 build 55", () => {
+  it("publishes desktop conversation parity as Android 1.9.15 build 56", () => {
     const js = fs.readFileSync("public/app.js", "utf8");
     const gradle = fs.readFileSync("android/app/build.gradle", "utf8");
 
-    expect(js).toContain('const appVersion = "1.9.14"');
-    expect(gradle).toContain('versionCode 55');
-    expect(gradle).toContain('versionName "1.9.14"');
+    expect(js).toContain('const appVersion = "1.9.15"');
+    expect(js).toContain("会话列表与电脑 Codex 保持一致");
+    expect(gradle).toContain('versionCode 56');
+    expect(gradle).toContain('versionName "1.9.15"');
   });
 
   it("shows a jump-to-latest control without forcing history readers to the bottom", () => {

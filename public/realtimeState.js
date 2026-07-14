@@ -58,6 +58,13 @@ export function applyMobileEvent(state, event) {
     const conversation = event.payload?.conversation;
     if (conversation?.id) state.conversations = upsertById(state.conversations, conversation);
   }
+  if (event.type === "conversation.deleted") {
+    const conversationId = event.payload?.conversationId ?? event.conversationId;
+    if (conversationId) {
+      state.conversations = state.conversations.filter((conversation) => conversation.id !== conversationId);
+      if (state.activeConversationId === conversationId) state.activeConversationId = "";
+    }
+  }
   return state;
 }
 
