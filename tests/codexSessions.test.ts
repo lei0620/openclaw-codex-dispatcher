@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { isCodexContextMessage, readRecentCodexConversations, selectRecentConversationMessages } from "../src/agent/codexSessions.js";
 import { stripInternalMarkup } from "../src/shared/textSanitizer.js";
@@ -104,6 +105,75 @@ describe("selectRecentConversationMessages", () => {
       restoreEnv("OPENCLAW_CODEX_CONVERSATION_LIMIT", previousLimit);
       fs.rmSync(tmp, { recursive: true, force: true });
       vi.resetModules();
+    }
+  });
+
+  it("matches desktop recency, title, and archive state when the Codex state database is available", () => {
+    const previousCodexHome = process.env.CODEX_HOME;
+    const previousLimit = process.env.OPENCLAW_CODEX_CONVERSATION_LIMIT;
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-home-"));
+    try {
+      process.env.CODEX_HOME = tmp;
+      delete process.env.OPENCLAW_CODEX_CONVERSATION_LIMIT;
+      const projectPath = path.join(tmp, "project");
+      const sessionsDir = path.join(tmp, "sessions", "2026", "07", "14");
+      fs.mkdirSync(projectPath, { recursive: true });
+      fs.mkdirSync(sessionsDir, { recursive: true });
+
+      const indexLines: string[] = [];
+      for (let index = 1; index <= 7; index += 1) {
+        const sessionId = `session-${index}`;
+        writeSessionFile(path.join(sessionsDir, `${sessionId}.jsonl`), sessionId, projectPath, [
+          { role: "user", text: `对话 ${index}`, at: `2026-07-14T0${index}:00:00.000Z` }
+        ]);
+        indexLines.push(JSON.stringify({
+          id: sessionId,
+          thread_name: index === 2 ? "配置飞牛NAS源" : `桌面标题 ${index}`,
+          updated_at: index === 2 ? "2026-07-04T09:18:28.000Z" : `2026-07-14T0${index}:00:00.000Z`
+        }));
+      }
+      fs.writeFileSync(path.join(tmp, "session_index.jsonl"), indexLines.join("\n"), "utf8");
+
+      const database = new DatabaseSync(path.join(tmp, "state_5.sqlite"));
+      database.exec(`
+        CREATE TABLE threads (
+          id TEXT PRIMARY KEY,
+          cwd TEXT NOT NULL,
+          title TEXT NOT NULL,
+          archived INTEGER NOT NULL DEFAULT 0,
+          updated_at_ms INTEGER,
+          recency_at_ms INTEGER
+        )
+      `);
+      const insert = database.prepare(`
+        INSERT INTO threads (id, cwd, title, archived, updated_at_ms, recency_at_ms)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+      const deviceCwd = `\\\\?\\${projectPath}`;
+      const desktopOrder = ["session-1", "session-2", "session-3", "session-4", "session-5", "session-6"];
+      desktopOrder.forEach((sessionId, index) => {
+        const timestamp = Date.parse(`2026-07-14T${String(12 - index).padStart(2, "0")}:00:00.000Z`);
+        insert.run(sessionId, deviceCwd, sessionId, 0, timestamp, timestamp);
+      });
+      const archivedTimestamp = Date.parse("2026-07-14T13:00:00.000Z");
+      insert.run("session-7", deviceCwd, "archived", 1, archivedTimestamp, archivedTimestamp);
+      database.close();
+
+      const projects: ProjectConfig[] = [{
+        id: "demo", name: "Demo", path: projectPath, defaultMode: "codex", allowedModes: ["codex"], notify: true
+      }];
+
+      expect(readRecentCodexConversations(projects).map(({ sessionId, title }) => ({ sessionId, title }))).toEqual([
+        { sessionId: "session-1", title: "桌面标题 1" },
+        { sessionId: "session-2", title: "配置飞牛NAS源" },
+        { sessionId: "session-3", title: "桌面标题 3" },
+        { sessionId: "session-4", title: "桌面标题 4" },
+        { sessionId: "session-5", title: "桌面标题 5" }
+      ]);
+    } finally {
+      restoreEnv("CODEX_HOME", previousCodexHome);
+      restoreEnv("OPENCLAW_CODEX_CONVERSATION_LIMIT", previousLimit);
+      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
