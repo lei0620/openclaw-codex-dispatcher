@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { ConversationMessage, ProjectConfig, SyncedCodexConversation } from "../shared/types.js";
 import { stripInternalMarkup } from "../shared/textSanitizer.js";
 
@@ -18,6 +19,16 @@ interface ParsedSession {
   messages: ConversationMessage[];
 }
 
+interface CodexThreadState {
+  sessionId: string;
+  cwd: string;
+  recencyAt: string;
+}
+
+interface SelectedCodexThread extends CodexThreadState {
+  projectId: string;
+}
+
 const codexConversationLimit = Number(process.env.OPENCLAW_CODEX_CONVERSATION_LIMIT ?? 5);
 const maxSessionFiles = Number(process.env.OPENCLAW_CODEX_SESSION_SCAN_MAX ?? 150);
 const defaultFullReadMaxBytes = 16 * 1024 * 1024;
@@ -32,6 +43,19 @@ export function readRecentCodexConversations(projects: ProjectConfig[]): SyncedC
   }
 
   const index = readSessionIndex(path.join(codexHome, "session_index.jsonl"));
+  const threadStates = readCodexThreadStates(path.join(codexHome, "state_5.sqlite"));
+  if (threadStates) {
+    return readStateBackedConversations(sessionsDir, index, threadStates, projects);
+  }
+
+  return readLegacyConversations(sessionsDir, index, projects);
+}
+
+function readLegacyConversations(
+  sessionsDir: string,
+  index: Map<string, IndexedSession>,
+  projects: ProjectConfig[]
+): SyncedCodexConversation[] {
   const files = listSessionFiles(sessionsDir)
     .sort((a, b) => b.mtimeMs - a.mtimeMs)
     .slice(0, maxSessionFiles);
@@ -73,6 +97,105 @@ export function readRecentCodexConversations(projects: ProjectConfig[]): SyncedC
   return [...perProject.values()]
     .flat()
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+function readStateBackedConversations(
+  sessionsDir: string,
+  index: Map<string, IndexedSession>,
+  threadStates: CodexThreadState[],
+  projects: ProjectConfig[]
+): SyncedCodexConversation[] {
+  const selected = selectRecentThreadStates(threadStates, projects);
+  const selectedById = new Map(selected.map((thread) => [thread.sessionId, thread]));
+  const files = listSessionFiles(sessionsDir, new Set(selectedById.keys()));
+  const sessionsById = new Map<string, ParsedSession>();
+
+  for (const file of files) {
+    const parsed = parseSessionFile(file.fullPath, index);
+    if (!parsed) {
+      continue;
+    }
+    const thread = selectedById.get(parsed.sessionId);
+    if (!thread) {
+      continue;
+    }
+    const stateBacked: ParsedSession = {
+      ...parsed,
+      cwd: thread.cwd,
+      updatedAt: thread.recencyAt
+    };
+    const existing = sessionsById.get(parsed.sessionId);
+    sessionsById.set(parsed.sessionId, existing ? mergeParsedSessions(existing, stateBacked) : stateBacked);
+  }
+
+  return selected
+    .map((thread): SyncedCodexConversation | undefined => {
+      const parsed = sessionsById.get(thread.sessionId);
+      if (!parsed) {
+        return undefined;
+      }
+      return {
+        projectId: thread.projectId,
+        sessionId: thread.sessionId,
+        title: parsed.title || "Codex 对话",
+        updatedAt: thread.recencyAt,
+        messages: parsed.messages
+      };
+    })
+    .filter((conversation): conversation is SyncedCodexConversation => Boolean(conversation))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+function readCodexThreadStates(databasePath: string): CodexThreadState[] | undefined {
+  if (!fs.existsSync(databasePath)) {
+    return undefined;
+  }
+
+  let database: DatabaseSync | undefined;
+  try {
+    database = new DatabaseSync(databasePath, { readOnly: true });
+    const rows = database.prepare(`
+      SELECT id, cwd, COALESCE(NULLIF(recency_at_ms, 0), updated_at_ms) AS recency_at_ms
+      FROM threads
+      WHERE archived = 0
+        AND COALESCE(thread_source, 'user') <> 'subagent'
+    `).all() as Array<Record<string, unknown>>;
+    return rows.flatMap((row) => {
+      const sessionId = typeof row.id === "string" ? row.id : "";
+      const cwd = typeof row.cwd === "string" ? row.cwd : "";
+      const recencyAtMs = Number(row.recency_at_ms);
+      if (!sessionId || !cwd || !Number.isFinite(recencyAtMs) || recencyAtMs <= 0) {
+        return [];
+      }
+      return [{ sessionId, cwd, recencyAt: new Date(recencyAtMs).toISOString() }];
+    });
+  } catch {
+    return undefined;
+  } finally {
+    database?.close();
+  }
+}
+
+function selectRecentThreadStates(
+  threadStates: CodexThreadState[],
+  projects: ProjectConfig[]
+): SelectedCodexThread[] {
+  const perProject = new Map<string, SelectedCodexThread[]>();
+  for (const thread of [...threadStates].sort((a, b) => b.recencyAt.localeCompare(a.recencyAt))) {
+    const project = findProjectForCwd(thread.cwd, projects);
+    if (!project) {
+      continue;
+    }
+    const selected = perProject.get(project.id) ?? [];
+    if (selected.length >= codexConversationLimit) {
+      continue;
+    }
+    selected.push({ ...thread, projectId: project.id });
+    perProject.set(project.id, selected);
+  }
+  return [...perProject.values()]
+    .flat()
+    .sort((a, b) => b.recencyAt.localeCompare(a.recencyAt));
 }
 
 function mergeParsedSessions(existing: ParsedSession, incoming: ParsedSession): ParsedSession {
@@ -120,9 +243,12 @@ function readSessionIndex(indexPath: string): Map<string, IndexedSession> {
   return sessions;
 }
 
-function listSessionFiles(root: string): Array<{ fullPath: string; mtimeMs: number }> {
+function listSessionFiles(root: string, selectedSessionIds?: Set<string>): Array<{ fullPath: string; mtimeMs: number }> {
   const results: Array<{ fullPath: string; mtimeMs: number }> = [];
   const stack = [root];
+  const normalizedSelectedIds = selectedSessionIds
+    ? [...selectedSessionIds].map((sessionId) => sessionId.toLowerCase())
+    : undefined;
   while (stack.length > 0) {
     const current = stack.pop()!;
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
@@ -132,6 +258,9 @@ function listSessionFiles(root: string): Array<{ fullPath: string; mtimeMs: numb
         continue;
       }
       if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+        if (normalizedSelectedIds && !normalizedSelectedIds.some((sessionId) => entry.name.toLowerCase().includes(sessionId))) {
+          continue;
+        }
         results.push({ fullPath, mtimeMs: fs.statSync(fullPath).mtimeMs });
       }
     }
@@ -312,5 +441,6 @@ function findProjectForCwd(cwd: string, projects: ProjectConfig[]): ProjectConfi
 }
 
 function normalizePath(value: string): string {
-  return path.resolve(value).replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
+  const withoutDevicePrefix = value.replace(/^\\\\\?\\/, "");
+  return path.resolve(withoutDevicePrefix).replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
 }

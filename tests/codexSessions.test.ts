@@ -108,7 +108,7 @@ describe("selectRecentConversationMessages", () => {
     }
   });
 
-  it("matches desktop recency, title, and archive state when the Codex state database is available", () => {
+  it("matches desktop recency, title, archive state, and user-thread filtering when the Codex state database is available", () => {
     const previousCodexHome = process.env.CODEX_HOME;
     const previousLimit = process.env.OPENCLAW_CODEX_CONVERSATION_LIMIT;
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-home-"));
@@ -121,7 +121,7 @@ describe("selectRecentConversationMessages", () => {
       fs.mkdirSync(sessionsDir, { recursive: true });
 
       const indexLines: string[] = [];
-      for (let index = 1; index <= 7; index += 1) {
+      for (let index = 1; index <= 8; index += 1) {
         const sessionId = `session-${index}`;
         writeSessionFile(path.join(sessionsDir, `${sessionId}.jsonl`), sessionId, projectPath, [
           { role: "user", text: `对话 ${index}`, at: `2026-07-14T0${index}:00:00.000Z` }
@@ -141,22 +141,25 @@ describe("selectRecentConversationMessages", () => {
           cwd TEXT NOT NULL,
           title TEXT NOT NULL,
           archived INTEGER NOT NULL DEFAULT 0,
+          thread_source TEXT,
           updated_at_ms INTEGER,
           recency_at_ms INTEGER
         )
       `);
       const insert = database.prepare(`
-        INSERT INTO threads (id, cwd, title, archived, updated_at_ms, recency_at_ms)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO threads (id, cwd, title, archived, thread_source, updated_at_ms, recency_at_ms)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
       `);
       const deviceCwd = `\\\\?\\${projectPath}`;
       const desktopOrder = ["session-1", "session-2", "session-3", "session-4", "session-5", "session-6"];
       desktopOrder.forEach((sessionId, index) => {
         const timestamp = Date.parse(`2026-07-14T${String(12 - index).padStart(2, "0")}:00:00.000Z`);
-        insert.run(sessionId, deviceCwd, sessionId, 0, timestamp, timestamp);
+        insert.run(sessionId, deviceCwd, sessionId, 0, "user", timestamp, timestamp);
       });
       const archivedTimestamp = Date.parse("2026-07-14T13:00:00.000Z");
-      insert.run("session-7", deviceCwd, "archived", 1, archivedTimestamp, archivedTimestamp);
+      insert.run("session-7", deviceCwd, "archived", 1, "user", archivedTimestamp, archivedTimestamp);
+      const subagentTimestamp = Date.parse("2026-07-14T14:00:00.000Z");
+      insert.run("session-8", deviceCwd, "subagent", 0, "subagent", subagentTimestamp, subagentTimestamp);
       database.close();
 
       const projects: ProjectConfig[] = [{

@@ -4,7 +4,7 @@
 
 **Goal:** Make the phone's five recent conversations per project match Codex desktop ordering while reducing Win11 sync work.
 
-**Architecture:** Add a read-only Codex thread metadata adapter that reads `state_5.sqlite`, filters archived threads, and selects five threads per project by desktop recency. Keep `session_index.jsonl` as the display-title source and retain the existing rollout-file scanner as a fallback when the database is unavailable.
+**Architecture:** Add a read-only Codex thread metadata adapter that reads `state_5.sqlite`, filters archived and internal subagent threads, and selects five user threads per project by desktop recency. Keep `session_index.jsonl` as the display-title source and retain the existing rollout-file scanner as a fallback when the database is unavailable.
 
 **Tech Stack:** TypeScript 5.7, Node.js 22 `node:sqlite`, Vitest 4, existing WebSocket agent sync.
 
@@ -18,7 +18,7 @@
 
 - [ ] **Step 1: Add a state database test fixture**
 
-Create a temporary `state_5.sqlite` with the Codex `threads` columns used by the agent. Insert six unarchived threads and one archived thread. Give `session-2` a stale `session_index.jsonl` timestamp but the second-newest `recency_at_ms`, and give the archived thread the newest recency.
+Create a temporary `state_5.sqlite` with the Codex `threads` columns used by the agent. Insert six user threads, one archived thread, and one `thread_source = 'subagent'` thread. Give `session-2` a stale `session_index.jsonl` timestamp but the second-newest `recency_at_ms`; give the archived and subagent threads newer recency values so an unfiltered implementation fails.
 
 ```ts
 const database = new DatabaseSync(path.join(tmp, "state_5.sqlite"));
@@ -28,6 +28,7 @@ database.exec(`
     cwd TEXT NOT NULL,
     title TEXT NOT NULL,
     archived INTEGER NOT NULL DEFAULT 0,
+    thread_source TEXT,
     updated_at_ms INTEGER,
     recency_at_ms INTEGER
   )
@@ -69,7 +70,7 @@ git commit -m "test: reproduce Codex conversation ordering drift"
 
 - [ ] **Step 1: Read Codex thread metadata without writing the database**
 
-Use `DatabaseSync` with `{ readOnly: true }`. Query only unarchived rows and convert the desktop recency value to ISO time. Any missing database, unsupported schema, or SQLite failure must return `undefined` so the legacy scanner remains available.
+Use `DatabaseSync` with `{ readOnly: true }`. Query only unarchived rows whose `thread_source` is not `subagent`, then convert the desktop recency value to ISO time. Any missing database, unsupported schema, or SQLite failure must return `undefined` so the legacy scanner remains available.
 
 ```ts
 interface CodexThreadState {
@@ -121,7 +122,7 @@ git commit -m "fix: match Codex desktop conversation order"
 
 Run `readRecentCodexConversations(discoverProjects(...))` against the current Codex home and record elapsed time and the five `D:\aixm\对话` titles.
 
-Expected: “配置飞牛NAS源” is second, no archived thread appears, and elapsed time is below the 2.5-second sync period.
+Expected: “配置飞牛NAS源” is second, no archived or subagent thread appears, and elapsed time is below the 2.5-second sync period.
 
 - [ ] **Step 2: Run full verification**
 
