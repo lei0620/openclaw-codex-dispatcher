@@ -212,14 +212,14 @@ describe("mobile panel copy", () => {
     expect(js).toContain('restartRealtime: () => realtime.restart()');
   });
 
-  it("publishes desktop conversation parity as Android 1.9.15 build 56", () => {
+  it("publishes the blue Wi-Fi app icon as Android 1.9.17 build 58", () => {
     const js = fs.readFileSync("public/app.js", "utf8");
     const gradle = fs.readFileSync("android/app/build.gradle", "utf8");
 
-    expect(js).toContain('const appVersion = "1.9.15"');
-    expect(js).toContain("会话列表与电脑 Codex 保持一致");
-    expect(gradle).toContain('versionCode 56');
-    expect(gradle).toContain('versionName "1.9.15"');
+    expect(js).toContain('const appVersion = "1.9.17"');
+    expect(js).toContain("蓝白色 iOS 风格 Wi-Fi 图标");
+    expect(gradle).toContain('versionCode 58');
+    expect(gradle).toContain('versionName "1.9.17"');
   });
 
   it("shows a jump-to-latest control without forcing history readers to the bottom", () => {
