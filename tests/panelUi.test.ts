@@ -212,14 +212,14 @@ describe("mobile panel copy", () => {
     expect(js).toContain('restartRealtime: () => realtime.restart()');
   });
 
-  it("publishes the blue Wi-Fi app icon as Android 1.9.17 build 58", () => {
+  it("publishes desktop running and read-state sync as Android 1.9.19 build 60", () => {
     const js = fs.readFileSync("public/app.js", "utf8");
     const gradle = fs.readFileSync("android/app/build.gradle", "utf8");
 
-    expect(js).toContain('const appVersion = "1.9.17"');
-    expect(js).toContain("蓝白色 iOS 风格 Wi-Fi 图标");
-    expect(gradle).toContain('versionCode 58');
-    expect(gradle).toContain('versionName "1.9.17"');
+    expect(js).toContain('const appVersion = "1.9.19"');
+    expect(js).toContain("同步电脑端读取状态");
+    expect(gradle).toContain('versionCode 60');
+    expect(gradle).toContain('versionName "1.9.19"');
   });
 
   it("shows a jump-to-latest control without forcing history readers to the bottom", () => {

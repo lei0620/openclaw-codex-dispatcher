@@ -118,7 +118,11 @@ export class TaskStore extends EventEmitter {
         source: "codex",
         codexSessionId: item.sessionId,
         refreshWindowId: existing?.refreshWindowId,
-        messages: item.messages
+        messages: item.messages,
+        activityStatus: item.activityStatus,
+        activityUpdatedAt: item.activityUpdatedAt,
+        desktopActive: item.desktopActive ?? false,
+        desktopReadAt: latestTimestamp(existing?.desktopReadAt, item.desktopReadAt)
       };
       this.conversations.set(id, record);
       if (!this.conversationOrder.includes(id)) {
@@ -950,10 +954,38 @@ function coalesceSyncedConversations(input: SyncedCodexConversation[]): SyncedCo
       sessionId: item.sessionId,
       title: incomingIsNewer ? item.title : existing.title,
       updatedAt: incomingIsNewer ? item.updatedAt : existing.updatedAt,
-      messages: mergeSyncedConversationMessages(existing.messages, item.messages)
+      messages: mergeSyncedConversationMessages(existing.messages, item.messages),
+      activityStatus: latestConversationActivity(existing, item)?.activityStatus,
+      activityUpdatedAt: latestConversationActivity(existing, item)?.activityUpdatedAt,
+      desktopActive: incomingIsNewer ? item.desktopActive : existing.desktopActive,
+      desktopReadAt: latestDesktopReadState(existing, item)?.desktopReadAt
     });
   }
   return [...conversations.values()];
+}
+
+function latestDesktopReadState(
+  current: SyncedCodexConversation,
+  incoming: SyncedCodexConversation
+): SyncedCodexConversation | undefined {
+  return [current, incoming]
+    .filter((conversation) => conversation.desktopReadAt)
+    .sort((left, right) => String(right.desktopReadAt).localeCompare(String(left.desktopReadAt)))[0];
+}
+
+function latestTimestamp(current?: string, incoming?: string): string | undefined {
+  if (!current) return incoming;
+  if (!incoming) return current;
+  return current.localeCompare(incoming) >= 0 ? current : incoming;
+}
+
+function latestConversationActivity(
+  current: SyncedCodexConversation,
+  incoming: SyncedCodexConversation
+): SyncedCodexConversation | undefined {
+  return [current, incoming]
+    .filter((conversation) => conversation.activityUpdatedAt)
+    .sort((left, right) => String(right.activityUpdatedAt).localeCompare(String(left.activityUpdatedAt)))[0];
 }
 
 function mergeSyncedConversationMessages(

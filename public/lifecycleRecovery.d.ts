@@ -17,4 +17,5 @@ export function createLifecycleRecovery(options: LifecycleRecoveryOptions): {
   start(): void;
   stop(): Promise<void>;
   whenIdle(): Promise<unknown>;
+  isActive(): boolean;
 };

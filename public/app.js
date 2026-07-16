@@ -1,7 +1,7 @@
 import { createRefreshGate } from "/refreshGate.js";
 import { deriveConnectionStatus } from "/connectionStatus.js";
 import { createRealtimeClient } from "/realtimeClient.js";
-import { applyMobileEvent } from "/realtimeState.js?v=1.9.17";
+import { applyMobileEvent } from "/realtimeState.js?v=1.9.19";
 import { createLifecycleRecovery } from "/lifecycleRecovery.js";
 import { buildDiagnosticsSnapshot, formatSanitizedDiagnostics } from "/diagnostics.js";
 import { createConnectionSettingsStore } from "/connectionSettings.js";
@@ -11,12 +11,13 @@ import { deriveAttentionConversations, deriveRecentProjects, deriveRunningConver
 import { createTaskStatusWatcher } from "/taskStatusWatcher.js";
 import { groupConversationMessages } from "/conversationPresentation.js";
 import { createUnreadTaskStore } from "/unreadTasks.js";
+import { deriveDesktopActivityTasks } from "/conversationAttention.js?v=1.9.19";
 
 const lanApiBase = "http://192.168.101.8:1314";
 const vpnApiBase = "http://100.69.253.5:1314";
 const defaultDispatcherToken = "";
-const appVersion = "1.9.17";
-const releaseNotes = "换用全新蓝白色 iOS 风格 Wi-Fi 图标，图形更简洁，桌面识别更清晰。";
+const appVersion = "1.9.19";
+const releaseNotes = "恢复正在执行和未读结果卡片，并同步电脑端读取状态，电脑已查看的结果不再重复提醒。";
 let token = defaultDispatcherToken;
 let apiBase = defaultApiBase();
 
@@ -776,7 +777,7 @@ function handleWatchedTask(task) {
     occurredAt: task.updatedAt || new Date().toISOString(),
     payload: { task }
   });
-  reconcileUnreadTasks(task.conversationId === state.activeConversationId && isMessageListNearBottom());
+  reconcileUnreadTasks(isConversationActuallyVisible(task.conversationId));
   updateConversationStatusFromTask(task);
   persistPendingSends();
   renderAll();
@@ -789,7 +790,7 @@ function upsertAllTask(task) {
 }
 
 function reconcileUnreadTasks(activeConversationVisible = false) {
-  unreadTaskStore.reconcile(state.allTasks, {
+  unreadTaskStore.reconcile(getAllAttentionTasks(), {
     activeConversationId: state.activeConversationId,
     activeConversationVisible
   });
@@ -847,10 +848,11 @@ async function handleRealtimeEvent(event) {
     upsertAllTask(event.payload.task);
   }
   applyMobileEvent(state, event);
+  updateConversationTaskStates(getAllAttentionTasks());
   if (event.type === "conversation.deleted") {
     ensureSelection();
   }
-  reconcileUnreadTasks(affectsActiveConversation && !userIsReadingHistory);
+  reconcileUnreadTasks(affectsActiveConversation && !userIsReadingHistory && isConversationActuallyVisible(event.conversationId));
   if (event.payload?.task?.conversationId) {
     updateConversationStatusFromTask(event.payload.task);
   }
@@ -951,7 +953,7 @@ async function switchProject(projectId) {
   state.activeProjectId = projectId;
   state.activeConversationId = conversationsForProject(projectId)[0]?.id ?? "";
   if (state.activeConversationId) {
-    unreadTaskStore.markConversationRead(state.activeConversationId, state.allTasks);
+    unreadTaskStore.markConversationRead(state.activeConversationId, getAllAttentionTasks());
   }
   persistSelection();
   requestMessageScrollToBottom();
@@ -969,7 +971,7 @@ async function switchConversation(conversationId) {
   }
   state.activeProjectId = conversation.projectId;
   state.activeConversationId = conversation.id;
-  unreadTaskStore.markConversationRead(conversation.id, state.allTasks);
+  unreadTaskStore.markConversationRead(conversation.id, getAllAttentionTasks());
   persistSelection();
   requestMessageScrollToBottom();
   await loadActiveTasks();
@@ -1003,7 +1005,10 @@ async function loadActiveSessionTasks() {
   const payload = await api("/api/tasks");
   const tasks = payload.tasks ?? [];
   state.allTasks = tasks;
-  updateConversationTaskStates(tasks);
+  updateConversationTaskStates([
+    ...tasks,
+    ...deriveDesktopActivityTasks(state.conversations, tasks.filter(isActiveTask))
+  ]);
   return tasks
     .filter(isActiveTask)
     .sort(compareActiveTasks);
@@ -1045,7 +1050,7 @@ function renderConversationSidebar() {
   const running = deriveRunningConversations(
     state.projects,
     state.conversations,
-    [...state.activeTasks].sort(compareActiveTasks)
+    getActiveAttentionTasks()
   );
   const recent = deriveRecentProjects(state.projects, state.conversations, 3);
   const allProjects = state.projects.length > 0
@@ -1167,7 +1172,7 @@ function updateConversationTaskStates(tasks) {
 }
 
 function updateConversationStatusFromTask(task) {
-  const active = state.activeTasks
+  const active = getActiveAttentionTasks()
     .filter((item) => item.conversationId === task.conversationId)
     .sort(compareActiveTasks)[0];
   if (active) {
@@ -1221,7 +1226,7 @@ function getDiagnosticsSnapshot() {
     codexWindows: state.codexWindows,
     conversation: getActiveConversation(),
     pendingApprovals: state.approvals.length,
-    activeTasks: state.activeTasks.length,
+    activeTasks: getActiveAttentionTasks().length,
     latestError: state.latestError
   });
 }
@@ -1273,11 +1278,13 @@ async function exportDiagnostics() {
 }
 
 function renderActiveSessions() {
+  const allAttentionTasks = getAllAttentionTasks();
+  markDesktopReadTasks(allAttentionTasks);
   const items = deriveAttentionConversations(
     state.projects,
     state.conversations,
-    state.activeTasks,
-    unreadTaskStore.getUnreadTasks(state.allTasks)
+    getActiveAttentionTasks(),
+    unreadTaskStore.getUnreadTasks(allAttentionTasks)
   );
   els.activeSessions.hidden = items.length === 0;
   if (items.length === 0) {
@@ -1313,14 +1320,14 @@ function renderActiveSessionCard({ task, project, conversation, unread }) {
 }
 
 async function switchActiveTaskConversation(taskId) {
-  const task = state.activeTasks.find((item) => item.id === taskId) ?? state.allTasks.find((item) => item.id === taskId);
+  const task = getAllAttentionTasks().find((item) => item.id === taskId);
   if (!task?.conversationId) {
     return;
   }
   setAutoFollow(false);
   state.activeProjectId = task.projectId;
   state.activeConversationId = task.conversationId;
-  unreadTaskStore.markConversationRead(task.conversationId, state.allTasks);
+  unreadTaskStore.markConversationRead(task.conversationId, getAllAttentionTasks());
   persistSelection();
   requestMessageScrollToBottom();
   await loadActiveTasks();
@@ -2221,11 +2228,47 @@ function conversationsForProject(projectId) {
 }
 
 function hasActiveTaskConversation(conversationId) {
-  return Boolean(conversationId) && state.activeTasks.some((task) => task.conversationId === conversationId);
+  return Boolean(conversationId) && getActiveAttentionTasks().some((task) => task.conversationId === conversationId);
 }
 
 function getActiveTaskForConversation(conversationId) {
-  return state.activeTasks.find((task) => task.conversationId === conversationId);
+  return getActiveAttentionTasks().find((task) => task.conversationId === conversationId);
+}
+
+function getDesktopActivityTasks() {
+  return deriveDesktopActivityTasks(state.conversations, state.activeTasks);
+}
+
+function getActiveAttentionTasks() {
+  return [...state.activeTasks, ...getDesktopActivityTasks().filter(isActiveTask)].sort(compareActiveTasks);
+}
+
+function getAllAttentionTasks() {
+  return [...state.allTasks, ...getDesktopActivityTasks()];
+}
+
+function markDesktopReadTasks(tasks) {
+  for (const conversation of state.conversations) {
+    if (!conversation.desktopActive && !conversation.desktopReadAt) continue;
+    const desktopReadAt = String(conversation.desktopReadAt || "");
+    const readTasks = tasks.filter((task) => {
+      if (task.conversationId !== conversation.id) return false;
+      if (conversation.desktopActive) return true;
+      return taskAttentionTime(task) <= desktopReadAt;
+    });
+    unreadTaskStore.markConversationRead(conversation.id, readTasks);
+  }
+}
+
+function taskAttentionTime(task) {
+  return String(task.finishedAt || task.updatedAt || task.createdAt || "");
+}
+
+function isConversationActuallyVisible(conversationId) {
+  if (!conversationId || conversationId !== state.activeConversationId || !isMessageListNearBottom()) {
+    return false;
+  }
+  return lifecycleRecovery?.isActive?.() ?? document.visibilityState !== "hidden";
 }
 
 function isActiveTask(task) {

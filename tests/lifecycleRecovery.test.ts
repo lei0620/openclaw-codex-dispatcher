@@ -75,10 +75,12 @@ describe("createLifecycleRecovery", () => {
       reconcile
     });
     controller.start();
+    await Promise.resolve();
 
     await nativeApp.emit("appStateChange", { isActive: false });
     await controller.whenIdle();
     expect(restartRealtime).not.toHaveBeenCalled();
+    expect(controller.isActive()).toBe(false);
 
     await controller.stop();
     expect(nativeApp.listenerCount()).toBe(0);

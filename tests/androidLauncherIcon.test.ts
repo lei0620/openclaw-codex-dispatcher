@@ -11,7 +11,7 @@ const launcherSizes = {
 
 describe("Android launcher icon", () => {
   it("keeps the generated source artwork and every required density", () => {
-    expect(readPngSize("artwork/codex-mobile-icon-ios-wifi-blue-source.png")).toEqual({ width: 1254, height: 1254 });
+    expect(readPngSize("artwork/codex-mobile-icon-ios-lightning-blue-source.png")).toEqual({ width: 1254, height: 1254 });
 
     for (const [density, size] of Object.entries(launcherSizes)) {
       const directory = `android/app/src/main/res/mipmap-${density}`;

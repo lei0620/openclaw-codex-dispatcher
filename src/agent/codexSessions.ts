@@ -2,8 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { ConversationMessage, ProjectConfig, SyncedCodexConversation } from "../shared/types.js";
+import type {
+  CodexConversationActivityStatus,
+  ConversationMessage,
+  ProjectConfig,
+  SyncedCodexConversation
+} from "../shared/types.js";
 import { stripInternalMarkup } from "../shared/textSanitizer.js";
+import { readCodexDesktopReadStates } from "./codexDesktopReadState.js";
 
 interface IndexedSession {
   id: string;
@@ -17,6 +23,8 @@ interface ParsedSession {
   title?: string;
   updatedAt: string;
   messages: ConversationMessage[];
+  activityStatus?: CodexConversationActivityStatus;
+  activityUpdatedAt?: string;
 }
 
 interface CodexThreadState {
@@ -29,11 +37,20 @@ interface SelectedCodexThread extends CodexThreadState {
   projectId: string;
 }
 
+interface SessionActivity {
+  status: CodexConversationActivityStatus;
+  updatedAt: string;
+}
+
 const codexConversationLimit = Number(process.env.OPENCLAW_CODEX_CONVERSATION_LIMIT ?? 5);
 const maxSessionFiles = Number(process.env.OPENCLAW_CODEX_SESSION_SCAN_MAX ?? 150);
 const defaultFullReadMaxBytes = 16 * 1024 * 1024;
 const defaultLargeFileHeadBytes = 1024 * 1024;
 const defaultLargeFileTailBytes = 8 * 1024 * 1024;
+const activityScanChunkBytes = 2 * 1024 * 1024;
+const activityScanOverlapBytes = 256 * 1024;
+const maxActivityScanBytes = 64 * 1024 * 1024;
+const sessionActivityCache = new Map<string, { size: number; activity?: SessionActivity }>();
 
 export function readRecentCodexConversations(projects: ProjectConfig[]): SyncedCodexConversation[] {
   const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
@@ -44,11 +61,16 @@ export function readRecentCodexConversations(projects: ProjectConfig[]): SyncedC
 
   const index = readSessionIndex(path.join(codexHome, "session_index.jsonl"));
   const threadStates = readCodexThreadStates(path.join(codexHome, "state_5.sqlite"));
-  if (threadStates) {
-    return readStateBackedConversations(sessionsDir, index, threadStates, projects);
-  }
-
-  return readLegacyConversations(sessionsDir, index, projects);
+  const conversations = threadStates
+    ? readStateBackedConversations(sessionsDir, index, threadStates, projects)
+    : readLegacyConversations(sessionsDir, index, projects);
+  const desktopReadStates = readCodexDesktopReadStates();
+  return conversations.map((conversation) => {
+    const desktop = desktopReadStates.get(conversation.sessionId);
+    return desktop
+      ? { ...conversation, desktopActive: desktop.active, desktopReadAt: desktop.readAt }
+      : conversation;
+  });
 }
 
 function readLegacyConversations(
@@ -89,7 +111,9 @@ function readLegacyConversations(
       sessionId: parsed.sessionId,
       title: parsed.title || "Codex 对话",
       updatedAt: parsed.updatedAt,
-      messages: parsed.messages
+      messages: parsed.messages,
+      activityStatus: parsed.activityStatus,
+      activityUpdatedAt: parsed.activityUpdatedAt
     });
     perProject.set(project.id, list);
   }
@@ -139,7 +163,9 @@ function readStateBackedConversations(
         sessionId: thread.sessionId,
         title: parsed.title || "Codex 对话",
         updatedAt: thread.recencyAt,
-        messages: parsed.messages
+        messages: parsed.messages,
+        activityStatus: parsed.activityStatus,
+        activityUpdatedAt: parsed.activityUpdatedAt
       };
     })
     .filter((conversation): conversation is SyncedCodexConversation => Boolean(conversation))
@@ -199,12 +225,17 @@ function selectRecentThreadStates(
 }
 
 function mergeParsedSessions(existing: ParsedSession, incoming: ParsedSession): ParsedSession {
+  const latestActivity = [existing, incoming]
+    .filter((session) => session.activityUpdatedAt)
+    .sort((left, right) => String(right.activityUpdatedAt).localeCompare(String(left.activityUpdatedAt)))[0];
   return {
     sessionId: existing.sessionId,
     cwd: existing.cwd || incoming.cwd,
     title: existing.title || incoming.title,
     updatedAt: existing.updatedAt.localeCompare(incoming.updatedAt) >= 0 ? existing.updatedAt : incoming.updatedAt,
-    messages: selectRecentConversationMessages(mergeConversationMessages(existing.messages, incoming.messages))
+    messages: selectRecentConversationMessages(mergeConversationMessages(existing.messages, incoming.messages)),
+    activityStatus: latestActivity?.activityStatus,
+    activityUpdatedAt: latestActivity?.activityUpdatedAt
   };
 }
 
@@ -273,9 +304,18 @@ function parseSessionFile(filePath: string, index: Map<string, IndexedSession>):
   let sessionId = "";
   let cwd = "";
   let fallbackTimestamp = fs.statSync(filePath).mtime.toISOString();
+  let activityStatus: CodexConversationActivityStatus | undefined;
+  let activityUpdatedAt: string | undefined;
 
   for (const line of readSessionFileForConversationSync(filePath).split(/\r?\n/)) {
-    if (!line.includes('"session_meta"') && !line.includes('"role":"user"') && !line.includes('"role":"assistant"')) {
+    if (
+      !line.includes('"session_meta"')
+      && !line.includes('"role":"user"')
+      && !line.includes('"role":"assistant"')
+      && !line.includes('"type":"task_started"')
+      && !line.includes('"type":"task_complete"')
+      && !line.includes('"type":"turn_aborted"')
+    ) {
       continue;
     }
     try {
@@ -284,6 +324,19 @@ function parseSessionFile(filePath: string, index: Map<string, IndexedSession>):
         sessionId = String(item.payload?.id ?? sessionId);
         cwd = String(item.payload?.cwd ?? cwd);
         fallbackTimestamp = String(item.payload?.timestamp ?? fallbackTimestamp);
+        continue;
+      }
+      if (item.type === "event_msg") {
+        const eventType = String(item.payload?.type ?? "");
+        if (["task_started", "task_complete", "turn_aborted"].includes(eventType)) {
+          activityUpdatedAt = String(item.timestamp ?? fallbackTimestamp);
+          fallbackTimestamp = activityUpdatedAt;
+          activityStatus = eventType === "task_started"
+            ? "running"
+            : eventType === "task_complete"
+              ? "completed"
+              : "idle";
+        }
         continue;
       }
       if (item.type === "response_item" && item.payload?.type === "message") {
@@ -318,13 +371,86 @@ function parseSessionFile(filePath: string, index: Map<string, IndexedSession>):
 
   const indexed = index.get(sessionId);
   const firstUserMessage = messages.find((message) => message.role === "user")?.text;
+  const latestActivity = readLatestSessionActivity(filePath);
   return {
     sessionId,
     cwd,
     title: indexed?.thread_name || firstUserMessage,
     updatedAt: indexed?.updated_at ?? fallbackTimestamp,
-    messages: selectRecentConversationMessages(messages)
+    messages: selectRecentConversationMessages(messages),
+    activityStatus: latestActivity?.status ?? activityStatus,
+    activityUpdatedAt: latestActivity?.updatedAt ?? activityUpdatedAt
   };
+}
+
+function readLatestSessionActivity(filePath: string): SessionActivity | undefined {
+  const stat = fs.statSync(filePath);
+  const cached = sessionActivityCache.get(filePath);
+  if (cached && stat.size === cached.size) return cached.activity;
+
+  if (cached && stat.size > cached.size) {
+    const appendedStart = Math.max(0, cached.size - activityScanOverlapBytes);
+    const appended = readFileRange(filePath, appendedStart, stat.size);
+    const activity = findLatestSessionActivity(appended) ?? cached.activity;
+    sessionActivityCache.set(filePath, { size: stat.size, activity });
+    return activity;
+  }
+
+  let end = stat.size;
+  let scanned = 0;
+  while (end > 0 && scanned < maxActivityScanBytes) {
+    const start = Math.max(0, end - activityScanChunkBytes);
+    const activity = findLatestSessionActivity(readFileRange(filePath, start, end));
+    if (activity) {
+      sessionActivityCache.set(filePath, { size: stat.size, activity });
+      return activity;
+    }
+    if (start === 0) break;
+    scanned += end - start;
+    end = start + activityScanOverlapBytes;
+  }
+
+  sessionActivityCache.set(filePath, { size: stat.size });
+  return undefined;
+}
+
+function findLatestSessionActivity(text: string): SessionActivity | undefined {
+  const events: SessionActivity[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (
+      !line.includes('"type":"task_started"')
+      && !line.includes('"type":"task_complete"')
+      && !line.includes('"type":"turn_aborted"')
+    ) {
+      continue;
+    }
+    try {
+      const item = JSON.parse(line);
+      if (item.type !== "event_msg") continue;
+      const eventType = String(item.payload?.type ?? "");
+      const status: CodexConversationActivityStatus = eventType === "task_started"
+        ? "running"
+        : eventType === "task_complete"
+          ? "completed"
+          : "idle";
+      events.push({ status, updatedAt: String(item.timestamp ?? "") });
+    } catch {
+      // Reverse chunks can begin or end in the middle of a JSONL record.
+    }
+  }
+  return events.filter((event) => event.updatedAt).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+}
+
+function readFileRange(filePath: string, start: number, end: number): string {
+  const length = Math.max(0, end - start);
+  const buffer = Buffer.alloc(length);
+  const handle = fs.openSync(filePath, "r");
+  try {
+    fs.readSync(handle, buffer, 0, length, start);
+  } finally {
+    fs.closeSync(handle);
+  }
+  return buffer.toString("utf8");
 }
 
 function readSessionFileForConversationSync(filePath: string): string {

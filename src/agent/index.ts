@@ -162,7 +162,11 @@ function sendCodexConversations(ws: WebSocket, projects: ProjectConfig[], force 
         projectId: conversation.projectId,
         sessionId: conversation.sessionId,
         updatedAt: conversation.updatedAt,
-        messages: conversation.messages
+        messages: conversation.messages,
+        activityStatus: conversation.activityStatus,
+        activityUpdatedAt: conversation.activityUpdatedAt,
+        desktopActive: conversation.desktopActive,
+        desktopReadAt: conversation.desktopReadAt
       }))
     }
   );

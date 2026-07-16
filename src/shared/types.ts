@@ -138,6 +138,10 @@ export interface ConversationRecord {
   codexSessionId?: string;
   refreshWindowId?: string;
   messages?: ConversationMessage[];
+  activityStatus?: CodexConversationActivityStatus;
+  activityUpdatedAt?: string;
+  desktopActive?: boolean;
+  desktopReadAt?: string;
 }
 
 export type MobileEventType =
@@ -196,7 +200,13 @@ export interface SyncedCodexConversation {
   title: string;
   updatedAt: string;
   messages: ConversationMessage[];
+  activityStatus?: CodexConversationActivityStatus;
+  activityUpdatedAt?: string;
+  desktopActive?: boolean;
+  desktopReadAt?: string;
 }
+
+export type CodexConversationActivityStatus = "running" | "completed" | "idle";
 
 export type ApprovalStatus = "pending" | "approved" | "denied";
 

@@ -316,20 +316,27 @@ describe("selectRecentConversationMessages", () => {
       const sessionId = "019f5a2e-8ef8-7e70-9508-b642b03da103";
       const lines = [
         { type: "session_meta", payload: { id: sessionId, cwd: projectPath, timestamp: "2026-07-11T10:00:00.000Z" } },
+        { type: "event_msg", timestamp: "2026-07-11T10:00:00.000Z", payload: { type: "task_started" } },
         { type: "response_item", timestamp: "2026-07-11T10:00:00.000Z", payload: { type: "message", role: "user", content: [{ text: "检查" }] } },
         { type: "response_item", timestamp: "2026-07-11T10:00:01.000Z", payload: { type: "message", role: "assistant", phase: "commentary", content: [{ text: "正在检查" }] } },
-        { type: "response_item", timestamp: "2026-07-11T10:00:02.000Z", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ text: "检查完成" }] } }
+        { type: "response_item", timestamp: "2026-07-11T10:00:02.000Z", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ text: "检查完成" }] } },
+        { type: "event_msg", timestamp: "2026-07-11T10:00:03.000Z", payload: { type: "task_complete" } }
       ];
       fs.writeFileSync(path.join(sessionsDir, `rollout-${sessionId}.jsonl`), lines.map((line) => JSON.stringify(line)).join("\n"));
       const projects: ProjectConfig[] = [{
         id: "demo", name: "Demo", path: projectPath, defaultMode: "codex", allowedModes: ["codex"], notify: true
       }];
 
-      expect(readRecentCodexConversations(projects)[0].messages).toMatchObject([
+      const conversation = readRecentCodexConversations(projects)[0];
+      expect(conversation.messages).toMatchObject([
         { role: "user", text: "检查" },
         { role: "assistant", phase: "commentary", text: "正在检查" },
         { role: "assistant", phase: "final_answer", text: "检查完成" }
       ]);
+      expect(conversation).toMatchObject({
+        activityStatus: "completed",
+        activityUpdatedAt: "2026-07-11T10:00:03.000Z"
+      });
     } finally {
       restoreEnv("CODEX_HOME", previousCodexHome);
       fs.rmSync(tmp, { recursive: true, force: true });

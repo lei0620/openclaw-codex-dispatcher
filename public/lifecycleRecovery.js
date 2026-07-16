@@ -9,6 +9,7 @@ export function createLifecycleRecovery(options) {
   let processing = Promise.resolve();
   let nativeListenerHandles = [];
   let nativeRegistration = Promise.resolve();
+  let appActive = documentTarget?.visibilityState !== "hidden";
 
   function isVisible() {
     return documentTarget?.visibilityState !== "hidden";
@@ -24,15 +25,20 @@ export function createLifecycleRecovery(options) {
   }
 
   function onVisibilityChange() {
+    appActive = isVisible();
     recover();
   }
 
   function registerNativeListeners() {
     if (!nativeApp?.addListener) return;
     nativeRegistration = Promise.allSettled([
-      Promise.resolve().then(() => nativeApp.addListener("resume", () => recover({ assumeVisible: true }))),
+      Promise.resolve().then(() => nativeApp.addListener("resume", () => {
+        appActive = true;
+        recover({ assumeVisible: true });
+      })),
       Promise.resolve().then(() => nativeApp.addListener("appStateChange", ({ isActive } = {}) => {
-        if (isActive) recover({ assumeVisible: true });
+        appActive = Boolean(isActive);
+        if (appActive) recover({ assumeVisible: true });
       }))
     ]).then(async (results) => {
       const handles = results
@@ -67,5 +73,5 @@ export function createLifecycleRecovery(options) {
     await Promise.all(handles.map((handle) => handle?.remove?.()));
   }
 
-  return { start, stop, whenIdle: () => processing };
+  return { start, stop, whenIdle: () => processing, isActive: () => appActive && isVisible() };
 }
